@@ -57,7 +57,12 @@ async def lifespan(app: FastAPI):
             "ROADGUARD_API_KEY is not set. Protected endpoints will answer 503 until it is configured."
         )
 
-    logger.info("Detection model ready: %s (%s)", settings.DETECTION_MODEL_PATH.exists(), settings.DETECTION_MODEL_PATH)
+    logger.info(
+        "Detection provider: %s (ready: %s, model: %s)",
+        settings.DETECTION_PROVIDER,
+        settings.DETECTION_READY,
+        settings.HF_DETECTION_MODEL_ID if settings.DETECTION_PROVIDER == "hf-inference" else settings.DETECTION_MODEL_PATH,
+    )
     logger.info("Authenticity model ready: %s (%s)", settings.AUTHENTICITY_MODEL_PATH.exists(), settings.AUTHENTICITY_MODEL_PATH)
 
     yield
@@ -112,7 +117,8 @@ async def health_root():
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "auth_configured": bool(settings.API_KEY),
-        "detection_model_ready": settings.DETECTION_MODEL_PATH.exists(),
+        "detection_provider": settings.DETECTION_PROVIDER,
+        "detection_model_ready": settings.DETECTION_READY,
     }
 
 
@@ -123,6 +129,7 @@ async def readiness_probe():
     return {
         "status": "ready" if registry.is_all_ready() else "degraded",
         "models_ready": registry.is_all_ready(),
+        "detection_provider": settings.DETECTION_PROVIDER,
         "detection_weights_present": settings.DETECTION_MODEL_PATH.exists(),
         "components": registry.health(),
     }

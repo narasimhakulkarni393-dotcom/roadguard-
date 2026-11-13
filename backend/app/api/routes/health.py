@@ -27,6 +27,7 @@ async def health_check():
         "version": settings.APP_VERSION,
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "database": "connected" if db_ok else "error",
-        "detection_model_ready": settings.DETECTION_MODEL_PATH.exists(),
+        "detection_provider": settings.DETECTION_PROVIDER,
+        "detection_model_ready": settings.DETECTION_READY,
         "authenticity_model_ready": settings.AUTHENTICITY_MODEL_PATH.exists(),
     }

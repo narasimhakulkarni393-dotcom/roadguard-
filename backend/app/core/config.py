@@ -79,6 +79,17 @@ class Settings:
     AUTHENTICITY_MODEL_PATH: Path = BASE_DIR.parent / "models" / "authenticity" / "best.pt"
     ROAD_CLASSIFIER_PATH: Path = BASE_DIR.parent / "models" / "road_classifier" / "best.pt"
 
+    # Detection provider: "yolo" (local weights) or "hf-inference" (remote API).
+    DETECTION_PROVIDER: str = os.getenv("DETECTION_PROVIDER", "yolo").strip().lower()
+    HF_TOKEN: str = os.getenv("HF_TOKEN", "").strip()
+    HF_DETECTION_MODEL_ID: str = os.getenv("HF_DETECTION_MODEL_ID", "facebook/detr-resnet-50").strip()
+
+    @property
+    def DETECTION_READY(self) -> bool:
+        if self.DETECTION_PROVIDER == "hf-inference":
+            return bool(self.HF_TOKEN and self.HF_DETECTION_MODEL_ID)
+        return self.DETECTION_MODEL_PATH.exists()
+
     # Upload limits
     MAX_FILE_SIZE_MB: int = _env_int("MAX_FILE_SIZE_MB", 50)
     MAX_VIDEO_SIZE_MB: int = _env_int("MAX_VIDEO_SIZE_MB", 200)

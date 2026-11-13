@@ -1,5 +1,21 @@
 # Model Card — RoadGuard AI Damage Detector
 
+## Deployment providers
+
+The damage detector can run in two modes, selected by `DETECTION_PROVIDER`:
+
+- `yolo` — local Ultralytics YOLOv8 weights (`models/detection/best.pt`).
+- `hf-inference` — remote object detection through the Hugging Face Inference API
+  (`huggingface_hub.InferenceClient`, `provider="hf-inference"`). Requires `HF_TOKEN`; the model
+  is set by `HF_DETECTION_MODEL_ID` (default `facebook/detr-resnet-50`).
+
+`facebook/detr-resnet-50` is trained on COCO (person, car, cat, …), which contains **no
+road-damage classes**. With that model the API returns zero defects and records the raw labels
+under `ignored_labels`; it never relabels a COCO object as a pothole. A model id trained on road
+damage is required for useful detections. Remote API errors surface as `model_ready: false`
+with the provider message — they are not reported as "no damage found". No accuracy claim is
+made for either provider, and neither has been evaluated on a labelled road-damage set.
+
 ## Model Details
 - **Developer**: RoadGuard AI Team
 - **Model Architecture**: Ultralytics YOLOv8 (yolov8n / yolov8s backbone)

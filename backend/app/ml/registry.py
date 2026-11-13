@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
+from app.core.config import settings
+from app.ml.base import BaseModelInterface
 from app.ml.road_classifier.model import RoadClassifierModel
 from app.ml.authenticity_classifier.model import AuthenticityClassifierModel
 from app.ml.damage_detector.model import DamageDetectorModel
@@ -25,7 +27,7 @@ class ModelRegistry:
     def __init__(self):
         self._road_classifier: RoadClassifierModel | None = None
         self._authenticity_classifier: AuthenticityClassifierModel | None = None
-        self._damage_detector: DamageDetectorModel | None = None
+        self._damage_detector: BaseModelInterface | None = None
         self._false_positive_filter: FalsePositiveFilterModel | None = None
 
     @property
@@ -41,9 +43,14 @@ class ModelRegistry:
         return self._authenticity_classifier
 
     @property
-    def damage_detector(self) -> DamageDetectorModel:
+    def damage_detector(self) -> BaseModelInterface:
         if self._damage_detector is None:
-            self._damage_detector = DamageDetectorModel()
+            if settings.DETECTION_PROVIDER == "hf-inference":
+                from app.ml.damage_detector.hf_inference import HuggingFaceDamageDetector
+
+                self._damage_detector = HuggingFaceDamageDetector()
+            else:
+                self._damage_detector = DamageDetectorModel()
         return self._damage_detector
 
     @property

@@ -77,6 +77,22 @@ Open `http://127.0.0.1:3000`.
 The API key is server-only. Next.js route handlers under `frontend/src/app/api/v1/*` attach it.
 Never place it in `NEXT_PUBLIC_*` variables.
 
+### Detection provider
+
+The detector is selected by `DETECTION_PROVIDER` in `backend/.env`:
+
+| Value | Behaviour | Requirements |
+| --- | --- | --- |
+| `yolo` (default) | Local Ultralytics YOLO weights at `models/detection/best.pt` | `torch`, `ultralytics` |
+| `hf-inference` | Remote object detection through `huggingface_hub.InferenceClient` | `HF_TOKEN`, internet access |
+
+For `hf-inference`, set `HF_TOKEN` and optionally `HF_DETECTION_MODEL_ID` (default
+`facebook/detr-resnet-50`). That default is COCO-trained and has **no road-damage classes**, so
+it reports no potholes/cracks; labels outside the PitScout taxonomy are counted as
+`ignored_labels`, never relabelled as defects. Point the model id at a road-damage
+object-detection model for meaningful output. Remote failures return `model_ready: false` with
+the provider error instead of an empty success. No accuracy is claimed for either provider.
+
 ### Verified local URLs
 
 | Service | URL | Notes |

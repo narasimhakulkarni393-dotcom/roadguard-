@@ -15,28 +15,52 @@ router = APIRouter(
 
 @router.get("")
 async def list_models():
-    detection_exists = settings.DETECTION_MODEL_PATH.exists()
+    detection_exists = settings.DETECTION_READY
+    if settings.DETECTION_PROVIDER == "hf-inference":
+        detector_entry = {
+            "name": "Hugging Face Inference Damage Detector",
+            "type": "object_detection",
+            "provider": "hf-inference",
+            "model_id": settings.HF_DETECTION_MODEL_ID,
+            "ready": detection_exists,
+            "credentials_configured": bool(settings.HF_TOKEN),
+            "classes": {
+                "0": "pothole",
+                "1": "manhole_cover",
+                "2": "sewage_hole",
+                "3": "longitudinal_crack",
+                "4": "transverse_crack",
+                "5": "alligator_crack",
+            },
+            "thresholds": settings.CLASS_CONFIDENCE_THRESHOLDS,
+            "metrics": None,
+            "metrics_note": "Not evaluated on a held-out set. No accuracy claim is made.",
+        }
+    else:
+        detector_entry = {
+            "name": "RoadGuard YOLOv8 Damage Detector",
+            "type": "object_detection",
+            "provider": "yolo",
+            "ready": detection_exists,
+            "path_configured": str(settings.DETECTION_MODEL_PATH),
+            "classes": {
+                "0": "pothole",
+                "1": "manhole_cover",
+                "2": "sewage_hole",
+                "3": "longitudinal_crack",
+                "4": "transverse_crack",
+                "5": "alligator_crack",
+            },
+            "thresholds": settings.CLASS_CONFIDENCE_THRESHOLDS,
+            # No held-out evaluation has been run against the traffic
+            # domain, so no accuracy numbers are reported.
+            "metrics": None,
+            "metrics_note": "Not evaluated on a held-out set. No accuracy claim is made.",
+        }
+
     return {
         "models": [
-            {
-                "name": "RoadGuard YOLOv8 Damage Detector",
-                "type": "object_detection",
-                "ready": detection_exists,
-                "path_configured": str(settings.DETECTION_MODEL_PATH),
-                "classes": {
-                    "0": "pothole",
-                    "1": "manhole_cover",
-                    "2": "sewage_hole",
-                    "3": "longitudinal_crack",
-                    "4": "transverse_crack",
-                    "5": "alligator_crack",
-                },
-                "thresholds": settings.CLASS_CONFIDENCE_THRESHOLDS,
-                # No held-out evaluation has been run against the traffic
-                # domain, so no accuracy numbers are reported.
-                "metrics": None,
-                "metrics_note": "Not evaluated on a held-out set. No accuracy claim is made.",
-            },
+            detector_entry,
             {
                 "name": "Road Scene Binary Classifier",
                 "type": "scene_classification",

@@ -20,10 +20,17 @@ python -m pytest -q -rs
 Observed:
 
 ```
-.......................................s.............................    [100%]
+..............................................s.......    [100%]
 SKIPPED [1] tests\test_pipeline_order.py:67: Test image not found
-68 passed, 1 skipped in 12.40s
+75 passed, 1 skipped in 14.46s
 ```
+
+The seven added tests cover the Hugging Face Inference detection provider with a stubbed
+client: missing `HF_TOKEN` fails closed, COCO labels are ignored rather than relabelled as
+potholes, bbox clamping, crack sub-class refinement, confidence filtering, remote errors
+surfacing as `model_ready: false`, and registry provider selection. No live Hugging Face call
+was made because no `HF_TOKEN` was available; the integration boundary and failure behaviour
+were verified, not remote inference quality.
 
 The single skip is a fixture-dependent pipeline-order test that requires an image not present in
 this checkout. It is not counted as a pass.
