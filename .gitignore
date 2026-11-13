@@ -1,61 +1,54 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-.env
-.venv
+.venv/
 env/
 venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Environment variables
-.env.local
-.env.*.local
-*.env
-
-# SQLite databases & test artifacts
-*.db
-*.sqlite
-*.sqlite3
+*.egg-info/
+dist/
+build/
 .pytest_cache/
-.coverage
-htmlcov/
 
-# IDE & Editor files
-.idea/
-.vscode/
-*.swp
-*.swo
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
 
-# Docker
-.docker/
+# Database & Runtime Storage
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+roadguard.db
+backend/roadguard.db*
+backend/storage/uploads/*
+backend/storage/annotated/*
+backend/storage/reports/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/annotated/.gitkeep
+!backend/storage/reports/.gitkeep
+storage/uploads/*
+storage/annotated/*
+storage/reports/*
+!storage/uploads/.gitkeep
+!storage/annotated/.gitkeep
+!storage/reports/.gitkeep
+docs/testts/
 
-# OS generated
+# Large Raw Datasets (ignore raw datasets, keep manifests)
+datasets/raw/*
+datasets/processed/*
+!datasets/raw/.gitkeep
+!datasets/processed/.gitkeep
+
+# Environment & OS
+.env
+.env.local
 .DS_Store
-Thumbs.db
+# Models runs / temp training artifacts
+models/runs/
+runs/
+!models/detection/best.pt
