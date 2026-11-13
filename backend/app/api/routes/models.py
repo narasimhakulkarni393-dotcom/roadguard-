@@ -36,6 +36,26 @@ async def list_models():
             "metrics": None,
             "metrics_note": "Not evaluated on a held-out set. No accuracy claim is made.",
         }
+    elif settings.DETECTION_PROVIDER == "gemini":
+        detector_entry = {
+            "name": "Gemini Vision Damage Detector",
+            "type": "object_detection",
+            "provider": "gemini",
+            "model_id": settings.GEMINI_MODEL_ID,
+            "ready": detection_exists,
+            "credentials_configured": bool(settings.GEMINI_API_KEY),
+            "classes": {
+                "0": "pothole",
+                "1": "manhole_cover",
+                "2": "sewage_hole",
+                "3": "longitudinal_crack",
+                "4": "transverse_crack",
+                "5": "alligator_crack",
+            },
+            "thresholds": settings.CLASS_CONFIDENCE_THRESHOLDS,
+            "metrics": None,
+            "metrics_note": "LLM vision output; not a calibrated detector and not evaluated. No accuracy claim is made.",
+        }
     else:
         detector_entry = {
             "name": "RoadGuard YOLOv8 Damage Detector",

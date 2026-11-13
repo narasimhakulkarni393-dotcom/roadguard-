@@ -20,17 +20,20 @@ python -m pytest -q -rs
 Observed:
 
 ```
-..............................................s.......    [100%]
+.......................................................s................  [84%]
+.............                                                             [100%]
 SKIPPED [1] tests\test_pipeline_order.py:67: Test image not found
-75 passed, 1 skipped in 14.46s
+84 passed, 1 skipped in 18.02s
 ```
 
-The seven added tests cover the Hugging Face Inference detection provider with a stubbed
-client: missing `HF_TOKEN` fails closed, COCO labels are ignored rather than relabelled as
-potholes, bbox clamping, crack sub-class refinement, confidence filtering, remote errors
-surfacing as `model_ready: false`, and registry provider selection. No live Hugging Face call
-was made because no `HF_TOKEN` was available; the integration boundary and failure behaviour
-were verified, not remote inference quality.
+The seven Hugging Face tests cover: missing `HF_TOKEN` fails closed, COCO labels are ignored
+rather than relabelled as potholes, bbox clamping, crack sub-class refinement, confidence
+filtering, remote errors surfacing as `model_ready: false`, and registry provider selection. The
+nine Gemini tests cover: missing key fails closed, normalized box conversion to pixels, unknown
+labels ignored, low-confidence and invalid boxes dropped, malformed JSON, HTTP 429, safety
+blocks, server-side key header usage, and registry provider selection. No live Hugging Face or
+Gemini call was made because no credential was configured in the test environment; the
+integration boundary and failure behaviour were verified, not remote inference quality.
 
 The single skip is a fixture-dependent pipeline-order test that requires an image not present in
 this checkout. It is not counted as a pass.

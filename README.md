@@ -85,6 +85,7 @@ The detector is selected by `DETECTION_PROVIDER` in `backend/.env`:
 | --- | --- | --- |
 | `yolo` (default) | Local Ultralytics YOLO weights at `models/detection/best.pt` | `torch`, `ultralytics` |
 | `hf-inference` | Remote object detection through `huggingface_hub.InferenceClient` | `HF_TOKEN`, internet access |
+| `gemini` | Gemini vision with a strict JSON box schema | `GEMINI_API_KEY`, `GEMINI_MODEL_ID` |
 
 For `hf-inference`, set `HF_TOKEN` and optionally `HF_DETECTION_MODEL_ID` (default
 `facebook/detr-resnet-50`). That default is COCO-trained and has **no road-damage classes**, so
@@ -92,6 +93,14 @@ it reports no potholes/cracks; labels outside the PitScout taxonomy are counted 
 `ignored_labels`, never relabelled as defects. Point the model id at a road-damage
 object-detection model for meaningful output. Remote failures return `model_ready: false` with
 the provider error instead of an empty success. No accuracy is claimed for either provider.
+
+For `gemini`, set `GEMINI_API_KEY` (never in source control) and optionally `GEMINI_MODEL_ID`
+(default `gemini-2.5-flash`). The image is sent to the Gemini API from the backend only, with a
+JSON schema that restricts labels to the six taxonomy classes. Gemini is a general vision LLM,
+not a trained pothole detector: boxes and confidences are self-reported, uncalibrated, and
+unevaluated. Gemini failures (HTTP errors, safety blocks, malformed JSON) surface as
+`model_ready: false`. Video mode issues one remote call per sampled frame, so it is slow and
+costly with either remote provider.
 
 ### Verified local URLs
 

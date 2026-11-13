@@ -2,12 +2,17 @@
 
 ## Deployment providers
 
-The damage detector can run in two modes, selected by `DETECTION_PROVIDER`:
+The damage detector can run in three modes, selected by `DETECTION_PROVIDER`:
 
 - `yolo` — local Ultralytics YOLOv8 weights (`models/detection/best.pt`).
 - `hf-inference` — remote object detection through the Hugging Face Inference API
   (`huggingface_hub.InferenceClient`, `provider="hf-inference"`). Requires `HF_TOKEN`; the model
   is set by `HF_DETECTION_MODEL_ID` (default `facebook/detr-resnet-50`).
+- `gemini` — Gemini vision (`GEMINI_MODEL_ID`, default `gemini-2.5-flash`) constrained by a
+  JSON schema containing only the six taxonomy labels. Requires `GEMINI_API_KEY`. Gemini is a
+  general vision LLM, not a trained object detector: its boxes and confidences are self-reported,
+  uncalibrated, and have not been evaluated against a labelled road-damage set. HTTP errors,
+  safety blocks and malformed JSON return `model_ready: false`, never an empty success.
 
 `facebook/detr-resnet-50` is trained on COCO (person, car, cat, …), which contains **no
 road-damage classes**. With that model the API returns zero defects and records the raw labels

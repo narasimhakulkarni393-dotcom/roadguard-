@@ -79,15 +79,20 @@ class Settings:
     AUTHENTICITY_MODEL_PATH: Path = BASE_DIR.parent / "models" / "authenticity" / "best.pt"
     ROAD_CLASSIFIER_PATH: Path = BASE_DIR.parent / "models" / "road_classifier" / "best.pt"
 
-    # Detection provider: "yolo" (local weights) or "hf-inference" (remote API).
+    # Detection provider: "yolo" (local weights), "hf-inference" or "gemini" (remote APIs).
     DETECTION_PROVIDER: str = os.getenv("DETECTION_PROVIDER", "yolo").strip().lower()
     HF_TOKEN: str = os.getenv("HF_TOKEN", "").strip()
     HF_DETECTION_MODEL_ID: str = os.getenv("HF_DETECTION_MODEL_ID", "facebook/detr-resnet-50").strip()
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+    GEMINI_MODEL_ID: str = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash").strip()
+    GEMINI_TIMEOUT_S: float = _env_float("GEMINI_TIMEOUT_S", 45.0)
 
     @property
     def DETECTION_READY(self) -> bool:
         if self.DETECTION_PROVIDER == "hf-inference":
             return bool(self.HF_TOKEN and self.HF_DETECTION_MODEL_ID)
+        if self.DETECTION_PROVIDER == "gemini":
+            return bool(self.GEMINI_API_KEY and self.GEMINI_MODEL_ID)
         return self.DETECTION_MODEL_PATH.exists()
 
     # Upload limits

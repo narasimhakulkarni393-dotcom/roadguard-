@@ -49,6 +49,10 @@ class ModelRegistry:
                 from app.ml.damage_detector.hf_inference import HuggingFaceDamageDetector
 
                 self._damage_detector = HuggingFaceDamageDetector()
+            elif settings.DETECTION_PROVIDER == "gemini":
+                from app.ml.damage_detector.gemini_vision import GeminiDamageDetector
+
+                self._damage_detector = GeminiDamageDetector()
             else:
                 self._damage_detector = DamageDetectorModel()
         return self._damage_detector

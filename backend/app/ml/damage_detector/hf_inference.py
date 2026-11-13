@@ -20,31 +20,10 @@ from PIL import Image
 
 from app.core.config import settings
 from app.ml.base import BaseModelInterface
-from app.ml.damage_detector.model import REQUIRED_TAXONOMY, _refine_crack_subclass
+from app.ml.damage_detector.model import REQUIRED_TAXONOMY
+from app.ml.damage_detector.taxonomy import CLASS_IDS, canonical_class
 
 logger = logging.getLogger("roadguard.ml.hf_detection")
-
-CLASS_IDS = {
-    "pothole": 0,
-    "manhole_cover": 1,
-    "sewage_hole": 2,
-    "longitudinal_crack": 3,
-    "transverse_crack": 4,
-    "alligator_crack": 5,
-}
-
-
-def _canonical_class(raw_label: str, width: int, height: int) -> Optional[str]:
-    label = (raw_label or "").strip().lower()
-    if "pothole" in label:
-        return "pothole"
-    if "manhole" in label:
-        return "manhole_cover"
-    if "sewage" in label:
-        return "sewage_hole"
-    if "crack" in label:
-        return _refine_crack_subclass(width, height)
-    return None
 
 
 def _box_value(box: Any, name: str) -> float:
@@ -145,15 +124,15 @@ class HuggingFaceDamageDetector(BaseModelInterface):
             bw = x2 - x1
             bh = y2 - y1
 
-            canonical_class = _canonical_class(raw_label, bw, bh)
-            if canonical_class is None:
+            mapped = canonical_class(raw_label, bw, bh)
+            if mapped is None:
                 ignored[raw_label] = ignored.get(raw_label, 0) + 1
                 continue
 
             detections.append(
                 {
-                    "class": canonical_class,
-                    "class_id": CLASS_IDS[canonical_class],
+                    "class": mapped,
+                    "class_id": CLASS_IDS[mapped],
                     "raw_label": raw_label,
                     "raw_class_id": None,
                     "confidence": round(score, 4),
