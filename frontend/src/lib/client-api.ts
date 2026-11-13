@@ -2,6 +2,7 @@ import type {
   AnalysisResult,
   AnalyticsOverview,
   DatasetStatus,
+  DatasetValidationResult,
   HealthStatus,
   InspectionList,
   Pothole,
@@ -159,13 +160,13 @@ export const clientApi = {
 
   datasets: () => requestJson<DatasetStatus>('/api/v1/datasets/status'),
   validateDataset: (name: string) =>
-    requestJson<{ detail?: string; message?: string }>('/api/v1/datasets/validate', {
+    requestJson<DatasetValidationResult>('/api/v1/datasets/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_name: name }),
     }),
   prepareDataset: (name: string) =>
-    requestJson<{ detail?: string; message?: string }>('/api/v1/datasets/prepare', {
+    requestJson<DatasetValidationResult>('/api/v1/datasets/prepare', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_name: name }),

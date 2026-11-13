@@ -187,6 +187,49 @@
 }
 .leaflet-popup-tip { background: #fff; }
 
+.pitscout-map {
+  background-color: #efebe1;
+  background-image:
+    linear-gradient(to right, rgba(37, 39, 32, 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(37, 39, 32, 0.055) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+.pitscout-map .leaflet-control-zoom {
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(37, 39, 32, 0.08);
+}
+
+.pitscout-tooltip {
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: #252720 !important;
+  color: #f8f6f0 !important;
+  box-shadow: 0 8px 24px -12px rgba(37, 39, 32, 0.55) !important;
+  padding: 6px 9px !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  line-height: 1.5 !important;
+}
+.pitscout-tooltip::before { border-top-color: #252720 !important; }
+
+.pitscout-cluster {
+  background: transparent;
+  border: 0;
+}
+
+/* User preference: collapse non-essential motion. */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
 /* Print: only the document content. */
 @media print {
   body { background: #ffffff !important; }

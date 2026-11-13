@@ -115,7 +115,7 @@ export const PAGE_TITLES: { prefix: string; title: string; section: string }[] =
   { prefix: '/map', title: 'Live Pothole Map', section: 'Intelligence' },
   { prefix: '/duplicates', title: 'Duplicate Detection Centre', section: 'Intelligence' },
   { prefix: '/report', title: 'Report a Pothole', section: 'Intelligence' },
-  { prefix: '/reports', title: 'Inspection Report', section: 'Intelligence' },
+  { prefix: '/reports', title: 'Submission Log', section: 'Intelligence' },
   { prefix: '/potholes', title: 'Pothole Management', section: 'Intelligence' },
   { prefix: '/analytics', title: 'Analytics & Reports', section: 'Intelligence' },
   { prefix: '/users', title: 'User Management', section: 'System' },

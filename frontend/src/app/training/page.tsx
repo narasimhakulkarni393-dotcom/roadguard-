@@ -1,251 +1,501 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import {
-  Cpu,
-  Play,
-  RotateCcw,
-  CheckCircle2,
   AlertCircle,
-  FileCode2,
-  Sliders,
-  Layers,
+  AlertTriangle,
+  CheckCircle2,
+  Cpu,
+  Database,
+  Gauge,
+  Info,
+  Loader2,
+  Play,
+  RefreshCw,
+  Server,
+  SlidersHorizontal,
   Terminal,
+  XCircle,
 } from 'lucide-react'
+import {
+  PageHeader,
+  StatCard,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  Button,
+  Badge,
+  Field,
+  Input,
+  Select,
+  SectionLabel,
+} from '@/components/ui'
+import type { DatasetStatus, HealthStatus } from '@/types/pitscout'
+import { clientApi } from '@/lib/client-api'
+import { formatNumber } from '@/lib/format'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
+type ModelKind = 'detection' | 'authenticity'
+
+function errorMessage(err: any, fallback: string) {
+  const detail = err?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') return detail.detail || detail.error || fallback
+  return err?.message || fallback
+}
 
 export default function TrainingPage() {
-  const [modelType, setModelType] = useState('detection')
+  const [modelType, setModelType] = useState<ModelKind>('detection')
   const [epochs, setEpochs] = useState(30)
   const [batchSize, setBatchSize] = useState(8)
   const [imgSize, setImgSize] = useState(640)
   const [learningRate, setLearningRate] = useState(0.01)
   const [device, setDevice] = useState('cpu')
 
-  const [activeJobId, setActiveJobId] = useState<string | null>(null)
-  const [jobStatus, setJobStatus] = useState<string | null>(null)
-  const [logs, setLogs] = useState<string>('')
+  const [health, setHealth] = useState<HealthStatus | null>(null)
+  const [datasets, setDatasets] = useState<DatasetStatus | null>(null)
+  const [readinessLoading, setReadinessLoading] = useState(true)
   const [isStarting, setIsStarting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [response, setResponse] = useState<{
+    tone: 'success' | 'warning' | 'error'
+    title: string
+    message: string
+  } | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<string | null>(null)
+  const [logs, setLogs] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const loadReadiness = useCallback(async () => {
+    setReadinessLoading(true)
+    const [healthResult, datasetResult] = await Promise.allSettled([clientApi.health(), clientApi.datasets()])
+    setHealth(healthResult.status === 'fulfilled' ? healthResult.value : null)
+    setDatasets(datasetResult.status === 'fulfilled' ? datasetResult.value : null)
+    setReadinessLoading(false)
+  }, [])
+
+  useEffect(() => {
+    void loadReadiness()
+  }, [loadReadiness])
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
+  const payload = useMemo(() => {
+    if (modelType === 'detection') {
+      return {
+        dataset_name: 'rdd2022',
+        model_type: 'yolov8n',
+        epochs: Number(epochs),
+        imgsz: Number(imgSize),
+        batch: Number(batchSize),
+        lr: Number(learningRate),
+        device,
+      }
+    }
+    return {
+      dataset_name: 'genimage',
+      model_type: 'mobilenet_v3_small',
+      epochs: Number(epochs),
+      batch: Number(batchSize),
+      lr: Number(learningRate),
+    }
+  }, [modelType, epochs, imgSize, batchSize, learningRate, device])
 
   const startTraining = async () => {
     setIsStarting(true)
-    setError(null)
+    setResponse(null)
+    setLogs('')
+    setJobStatus(null)
+    setJobId(null)
     try {
-      const endpoint =
-        modelType === 'detection'
-          ? `${API_BASE}/api/v1/training/detection/start`
-          : `${API_BASE}/api/v1/training/authenticity/start`
-
-      const payload =
-        modelType === 'detection'
-          ? {
-              dataset_name: 'rdd2022',
-              model_type: 'yolov8n',
-              epochs: Number(epochs),
-              imgsz: Number(imgSize),
-              batch: Number(batchSize),
-              lr: Number(learningRate),
-              device: device,
-            }
-          : {
-              dataset_name: 'genimage',
-              model_type: 'mobilenet_v3_small',
-              epochs: Number(epochs),
-              batch: Number(batchSize),
-              lr: Number(learningRate),
-            }
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      const result = await clientApi.startTraining(payload, modelType)
+      setJobId(result.job_id || null)
+      setJobStatus(result.status || 'submitted')
+      setResponse({
+        tone: 'success',
+        title: 'Training job accepted',
+        message: result.job_id ? `Job ${result.job_id} was created.` : 'The backend accepted the training request.',
       })
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}))
-        throw new Error(errJson.detail || `HTTP ${res.status}`)
+      if (result.job_id) {
+        const id = result.job_id
+        if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = setInterval(async () => {
+          try {
+            const log = await clientApi.trainingLogs(id)
+            setLogs(log.logs)
+            setJobStatus(log.status)
+          } catch {
+            // A transient log read failure should not clear the console.
+          }
+        }, 2500)
       }
-      const json = await res.json()
-      setActiveJobId(json.job_id)
-      setJobStatus(json.status)
-      setLogs(`[${new Date().toISOString()}] Job initialized with ID: ${json.job_id}\nConnecting to training worker...`)
     } catch (err: any) {
-      setError(err.message || 'Failed to trigger training job.')
+      const status = err?.status
+      setResponse({
+        tone: status === 501 ? 'warning' : 'error',
+        title: status === 501 ? 'Training is not implemented in this deployment' : 'Training request failed',
+        message: errorMessage(err, 'The training endpoint could not be reached.'),
+      })
     } finally {
       setIsStarting(false)
     }
   }
 
-  // Poll for logs if there is an active job
-  useEffect(() => {
-    if (!activeJobId) return
+  const rawFiles = datasets?.summary?.total_raw_files ?? datasets?.datasets.reduce((sum, item) => sum + item.raw_files, 0) ?? 0
+  const processedFiles =
+    datasets?.summary?.total_processed_files ?? datasets?.datasets.reduce((sum, item) => sum + item.processed_files, 0) ?? 0
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/training/${activeJobId}/logs`)
-        if (res.ok) {
-          const json = await res.json()
-          setLogs(json.logs)
-          setJobStatus(json.status)
-        }
-      } catch (e) {
-        console.error(e)
-      }
-    }, 2000)
+  const requirements = [
+    {
+      label: 'Backend API reachable',
+      met: Boolean(health),
+      detail: health ? `${health.app} v${health.version}` : 'No health response received.',
+    },
+    {
+      label: 'Detection checkpoint installed',
+      met: Boolean(health?.detection_model_ready),
+      detail: health?.detection_model_ready ? 'Model reports ready.' : 'The detection checkpoint is not loaded.',
+    },
+    {
+      label: 'Authenticity checkpoint installed',
+      met: Boolean(health?.authenticity_model_ready),
+      detail: health?.authenticity_model_ready ? 'Model reports ready.' : 'The authenticity checkpoint is not loaded.',
+    },
+    {
+      label: 'Curated dataset prepared',
+      met: processedFiles > 0,
+      detail:
+        processedFiles > 0
+          ? `${formatNumber(processedFiles)} processed files detected.`
+          : `${formatNumber(rawFiles)} raw files, none processed.`,
+    },
+  ]
 
-    return () => clearInterval(interval)
-  }, [activeJobId])
+  const unmet = requirements.filter((item) => !item.met).length
 
   return (
-    <div className="flex flex-col gap-8 py-4">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-2">
-            <Cpu className="h-7 w-7 text-cyan-400" />
-            Neural Model Training &amp; Orchestration
-          </h1>
-          <p className="text-xs md:text-sm text-slate-400 mt-1">
-            Fine-tune YOLOv8 on CRDDC RDD2022 road defect annotations or train authenticity classifiers.
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="System"
+        title="Model training"
+        description="Inspect training readiness and submit the exact configuration the backend would use. No fake runs, progress bars or accuracy claims."
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => void loadReadiness()} loading={readinessLoading}>
+              <RefreshCw />
+              Refresh readiness
+            </Button>
+            <Button variant="secondary" asChild>
+              <Link href="/datasets">
+                <Database />
+                Datasets
+              </Link>
+            </Button>
+          </>
+        }
+      />
+
+      <div className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning-soft p-4">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+        <div className="text-[11.5px] leading-relaxed text-warning">
+          <p className="font-semibold">Training is not implemented in this build</p>
+          <p className="mt-0.5 opacity-90">
+            The backend intentionally answers HTTP 501. It requires a curated, split dataset and a training runtime, and ships
+            with neither. The controls below submit a real request so the boundary is visible instead of simulated.
           </p>
         </div>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-12">
-        {/* Left: Training Configuration Form */}
-        <div className="lg:col-span-5 flex flex-col gap-5 rounded-2xl border border-white/10 bg-[#111C2E] p-6 shadow-xl">
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider text-cyan-400 flex items-center gap-2">
-            <Sliders className="h-4 w-4" />
-            Hyperparameter Configuration
-          </h3>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Detection model"
+          value={health ? (health.detection_model_ready ? 'Ready' : 'Pending') : '—'}
+          hint="from /api/v1/health"
+          icon={Cpu}
+          tone={health?.detection_model_ready ? 'success' : 'warning'}
+        />
+        <StatCard
+          label="Authenticity model"
+          value={health ? (health.authenticity_model_ready ? 'Ready' : 'Pending') : '—'}
+          hint="from /api/v1/health"
+          icon={Server}
+          tone={health?.authenticity_model_ready ? 'success' : 'warning'}
+        />
+        <StatCard label="Raw dataset files" value={formatNumber(rawFiles)} hint="declared corpora" icon={Database} tone="info" />
+        <StatCard
+          label="Readiness gaps"
+          value={unmet}
+          hint="requirements not met"
+          icon={Gauge}
+          tone={unmet === 0 ? 'success' : 'warning'}
+        />
+      </div>
 
-          <div className="flex flex-col gap-4 text-xs">
-            {/* Model Target */}
-            <div>
-              <label className="text-slate-300 font-medium block mb-1.5">Target Architecture</label>
-              <select
-                value={modelType}
-                onChange={(e) => setModelType(e.target.value)}
-                className="w-full rounded-lg border border-white/10 bg-slate-900 p-2.5 text-white"
-              >
-                <option value="detection">YOLOv8n (Object Detection &bull; RDD2022)</option>
-                <option value="authenticity">MobileNetV3 (Authenticity &bull; GenImage)</option>
-              </select>
-            </div>
-
-            {/* Epochs Slider */}
-            <div>
-              <div className="flex justify-between text-slate-300 mb-1">
-                <span>Epochs</span>
-                <span className="font-mono text-cyan-400 font-bold">{epochs}</span>
-              </div>
-              <input
-                type="range"
-                min="5"
-                max="100"
-                step="5"
-                value={epochs}
-                onChange={(e) => setEpochs(Number(e.target.value))}
-                className="w-full accent-cyan-400"
-              />
-            </div>
-
-            {/* Batch Size */}
-            <div className="grid grid-cols-2 gap-3">
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="flex flex-col gap-5 lg:col-span-5">
+          <Card>
+            <CardHeader>
               <div>
-                <label className="text-slate-300 font-medium block mb-1">Batch Size</label>
-                <select
-                  value={batchSize}
-                  onChange={(e) => setBatchSize(Number(e.target.value))}
-                  className="w-full rounded-lg border border-white/10 bg-slate-900 p-2 text-white"
+                <SectionLabel>Configuration</SectionLabel>
+                <CardTitle className="mt-1.5 flex items-center gap-2">
+                  <SlidersHorizontal className="size-4 text-primary" />
+                  Hyperparameters
+                </CardTitle>
+                <CardDescription>
+                  These values are sent verbatim to the selected training endpoint. Ranges match the backend schema.
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Field label="Target model" htmlFor="training-model" hint="Detection uses RDD2022; authenticity uses GenImage.">
+                <Select
+                  id="training-model"
+                  value={modelType}
+                  onChange={(event) => setModelType(event.target.value as ModelKind)}
                 >
-                  <option value={4}>4 (Low memory)</option>
-                  <option value={8}>8 (Recommended CPU)</option>
-                  <option value={16}>16 (Standard)</option>
-                  <option value={32}>32 (GPU)</option>
-                </select>
-              </div>
+                  <option value="detection">YOLOv8n · road damage detection</option>
+                  <option value="authenticity">MobileNetV3 · authenticity</option>
+                </Select>
+              </Field>
 
               <div>
-                <label className="text-slate-300 font-medium block mb-1">Image Size (px)</label>
-                <select
-                  value={imgSize}
-                  onChange={(e) => setImgSize(Number(e.target.value))}
-                  className="w-full rounded-lg border border-white/10 bg-slate-900 p-2 text-white"
-                >
-                  <option value={416}>416 px (Fast)</option>
-                  <option value={640}>640 px (Standard)</option>
-                  <option value={1024}>1024 px (High Res)</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Learning Rate & Device */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-slate-300 font-medium block mb-1">Learning Rate</label>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <label htmlFor="training-epochs" className="text-[11px] font-semibold tracking-wide text-graphite">
+                    Epochs
+                  </label>
+                  <span className="font-mono text-[11px] text-primary-hover">{epochs}</span>
+                </div>
                 <input
-                  type="number"
-                  step="0.001"
-                  value={learningRate}
-                  onChange={(e) => setLearningRate(Number(e.target.value))}
-                  className="w-full rounded-lg border border-white/10 bg-slate-900 p-2 text-white font-mono"
+                  id="training-epochs"
+                  type="range"
+                  min={modelType === 'detection' ? 1 : 5}
+                  max={modelType === 'detection' ? 300 : 100}
+                  step={5}
+                  value={epochs}
+                  onChange={(event) => setEpochs(Number(event.target.value))}
+                  className="h-2 w-full cursor-pointer appearance-none rounded-full bg-[#efebe1] accent-[#f08a42]"
                 />
+                <div className="mt-1 flex justify-between font-mono text-[9px] text-muted">
+                  <span>{modelType === 'detection' ? 1 : 5}</span>
+                  <span>{modelType === 'detection' ? 300 : 100}</span>
+                </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Batch size" htmlFor="training-batch">
+                  <Select
+                    id="training-batch"
+                    value={batchSize}
+                    onChange={(event) => setBatchSize(Number(event.target.value))}
+                  >
+                    {[4, 8, 16, 32].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {modelType === 'detection' ? (
+                  <Field label="Image size (px)" htmlFor="training-size">
+                    <Select
+                      id="training-size"
+                      value={imgSize}
+                      onChange={(event) => setImgSize(Number(event.target.value))}
+                    >
+                      {[320, 416, 640, 1024, 1280].map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                ) : (
+                  <Field label="Learning rate" htmlFor="training-lr-auth">
+                    <Input
+                      id="training-lr-auth"
+                      type="number"
+                      step="0.0005"
+                      min="0.0001"
+                      value={learningRate}
+                      onChange={(event) => setLearningRate(Number(event.target.value))}
+                      className="font-mono"
+                    />
+                  </Field>
+                )}
+              </div>
+
+              {modelType === 'detection' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Learning rate" htmlFor="training-lr">
+                    <Input
+                      id="training-lr"
+                      type="number"
+                      step="0.001"
+                      min="0.0001"
+                      value={learningRate}
+                      onChange={(event) => setLearningRate(Number(event.target.value))}
+                      className="font-mono"
+                    />
+                  </Field>
+                  <Field label="Device" htmlFor="training-device">
+                    <Select id="training-device" value={device} onChange={(event) => setDevice(event.target.value)}>
+                      <option value="cpu">CPU</option>
+                      <option value="cuda">CUDA (if available)</option>
+                    </Select>
+                  </Field>
+                </div>
+              )}
+
+              <div className="flex items-start gap-2 rounded-lg border border-line bg-[#fbf9f3] p-2.5 text-[10.5px] leading-relaxed text-muted">
+                <Info className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Nothing is trained locally. This form issues a real POST to{' '}
+                  <span className="font-mono">/api/v1/training/{modelType}/start</span> through the server-side proxy.
+                </span>
+              </div>
+
+              <Button className="w-full" onClick={startTraining} loading={isStarting} disabled={!health}>
+                {isStarting ? 'Submitting request…' : 'Submit training request'}
+                {!isStarting && <Play />}
+              </Button>
+              {!health && (
+                <p className="text-[10.5px] leading-relaxed text-warning">
+                  The API is unreachable, so the request cannot be submitted.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <div>
-                <label className="text-slate-300 font-medium block mb-1">Execution Hardware</label>
-                <select
-                  value={device}
-                  onChange={(e) => setDevice(e.target.value)}
-                  className="w-full rounded-lg border border-white/10 bg-slate-900 p-2 text-white font-mono"
-                >
-                  <option value="cpu">CPU (Active Machine)</option>
-                  <option value="cuda">CUDA (If GPU attached)</option>
-                </select>
+                <SectionLabel>Request body</SectionLabel>
+                <CardTitle className="mt-1.5">Exact JSON payload</CardTitle>
               </div>
-            </div>
-          </div>
-
-          <button
-            onClick={startTraining}
-            disabled={isStarting}
-            className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-teal-400 py-3 text-sm font-bold text-slate-950 shadow-md shadow-cyan-500/20 hover:brightness-110 disabled:opacity-50"
-          >
-            <Play className="h-4 w-4 fill-slate-950" />
-            {isStarting ? 'Submitting Job...' : 'Start Training Run'}
-          </button>
-
-          {error && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+              <Badge tone="neutral">{modelType}</Badge>
+            </CardHeader>
+            <CardContent>
+              <pre className="overflow-x-auto rounded-xl border border-line bg-[#fbf9f3] p-3 font-mono text-[10.5px] leading-relaxed text-graphite">
+                {JSON.stringify(payload, null, 2)}
+              </pre>
+            </CardContent>
+          </Card>
         </div>
 
-        {/* Right: Live Training Console & Logs */}
-        <div className="lg:col-span-7 flex flex-col gap-4">
-          <div className="flex h-full min-h-[460px] flex-col rounded-2xl border border-white/10 bg-slate-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2 text-xs font-mono text-cyan-400">
-                <Terminal className="h-4 w-4" />
-                <span>Training Telemetry Output</span>
+        <div className="flex flex-col gap-5 lg:col-span-7">
+          <Card>
+            <CardHeader>
+              <div>
+                <SectionLabel>Readiness</SectionLabel>
+                <CardTitle className="mt-1.5">What this deployment would need</CardTitle>
               </div>
-              {jobStatus && (
-                <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[10px] font-mono text-cyan-300 uppercase">
-                  Status: {jobStatus}
-                </span>
-              )}
-            </div>
+              <Badge tone={unmet === 0 ? 'success' : 'warning'} dot>
+                {unmet === 0 ? 'Ready' : `${unmet} gap${unmet === 1 ? '' : 's'}`}
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {requirements.map((item) => (
+                <div
+                  key={item.label}
+                  className="flex items-start gap-2.5 rounded-xl border border-line bg-[#fbf9f3] p-3"
+                >
+                  {readinessLoading ? (
+                    <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted" />
+                  ) : item.met ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+                  ) : (
+                    <XCircle className="mt-0.5 size-4 shrink-0 text-warning" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-medium text-ink">{item.label}</p>
+                    <p className="mt-0.5 text-[10.5px] leading-relaxed text-muted">{item.detail}</p>
+                  </div>
+                </div>
+              ))}
+              <p className="pt-1 text-[10.5px] leading-relaxed text-muted">
+                Even when all four are met, the backend must implement a training runner before a job can exist. Readiness
+                here is informational, not a promise that training will start.
+              </p>
+            </CardContent>
+          </Card>
 
-            <pre className="mt-4 flex-1 overflow-auto rounded-xl bg-[#0B1220] p-4 font-mono text-xs text-slate-300 leading-relaxed">
-              {logs ||
-                'No active training session in progress.\nSelect parameters and click "Start Training Run" to execute model fine-tuning.'}
-            </pre>
-          </div>
+          {response && (
+            <div
+              className={`rounded-xl border p-4 ${
+                response.tone === 'success'
+                  ? 'border-success/20 bg-success-soft'
+                  : response.tone === 'warning'
+                    ? 'border-warning/25 bg-warning-soft'
+                    : 'border-critical/20 bg-critical-soft'
+              }`}
+            >
+              <div className="flex items-start gap-2.5">
+                {response.tone === 'success' ? (
+                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+                ) : response.tone === 'warning' ? (
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                ) : (
+                  <AlertCircle className="mt-0.5 size-4 shrink-0 text-critical" />
+                )}
+                <div>
+                  <p
+                    className={`text-[12.5px] font-semibold ${
+                      response.tone === 'success'
+                        ? 'text-success'
+                        : response.tone === 'warning'
+                          ? 'text-warning'
+                          : 'text-critical'
+                    }`}
+                  >
+                    {response.title}
+                  </p>
+                  <p className="mt-1 text-[11.5px] leading-relaxed text-secondary">{response.message}</p>
+                  {jobId && (
+                    <p className="mt-1 font-mono text-[10.5px] text-ink">
+                      job {jobId} · status {jobStatus || 'unknown'}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <Card className="overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <Terminal className="size-4 text-primary" />
+                <span className="text-[12.5px] font-semibold text-ink">Training telemetry</span>
+              </div>
+              <Badge tone={jobStatus ? 'info' : 'neutral'} dot={Boolean(jobStatus)}>
+                {jobStatus || 'no active job'}
+              </Badge>
+            </div>
+            <div className="bg-graphite p-4">
+              <pre className="min-h-[240px] max-h-[360px] overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-[#d8d4c8]">
+                {logs ||
+                  [
+                    'PitScout training console',
+                    '-------------------------',
+                    '',
+                    'No training job exists.',
+                    'The submission endpoint currently answers HTTP 501.',
+                    'A real job would appear here via /api/v1/training/{job_id}/logs.',
+                  ].join('\n')}
+              </pre>
+            </div>
+          </Card>
+
+          <p className="flex items-start gap-2 text-[10.5px] leading-relaxed text-muted">
+            <Info className="mt-0.5 size-3.5 shrink-0" />
+            Model accuracy is never claimed here. Any future checkpoint must be evaluated on a held-out split before its
+            metrics are displayed as real.
+          </p>
         </div>
       </div>
     </div>

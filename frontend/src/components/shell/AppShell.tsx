@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { clientApi } from '@/lib/client-api'
 import type { HealthStatus } from '@/types/pitscout'
 import { ToastProvider } from '@/components/ui/Toast'
+import { APPEARANCE_EVENT, applyAppearance, readAppearance } from '@/lib/preferences'
 import { Logo } from './Logo'
 import { NAV_ITEMS, resolvePage, type NavItem } from './nav-config'
 import { SearchPalette } from './SearchPalette'
@@ -158,6 +159,17 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     setMobileOpen(false)
   }, [pathname])
+
+  React.useEffect(() => {
+    applyAppearance(readAppearance())
+    const sync = () => applyAppearance(readAppearance())
+    window.addEventListener(APPEARANCE_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(APPEARANCE_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -308,10 +320,43 @@ function ShellInner({ children }: { children: React.ReactNode }) {
   )
 }
 
+function ShellFallback({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen">
+      <aside className="app-sidebar fixed inset-y-0 left-0 z-50 hidden w-[264px] flex-col border-r border-line bg-sidebar lg:flex">
+        <div className="flex h-16 shrink-0 items-center border-b border-line px-4">
+          <Logo />
+        </div>
+        <div className="mt-4 flex-1 space-y-2 px-4" aria-hidden>
+          {Array.from({ length: 8 }).map((_, index) => (
+            <div key={index} className="h-8 animate-pulse rounded-[10px] bg-card/60" />
+          ))}
+        </div>
+        <div className="shrink-0 border-t border-line p-3">
+          <div className="h-[104px] animate-pulse rounded-xl border border-line bg-card/60" />
+        </div>
+      </aside>
+
+      <div className="lg:pl-[264px]">
+        <header className="app-topbar sticky top-0 z-40 border-b border-line bg-app/85 backdrop-blur-xl">
+          <div className="flex h-16 items-center gap-3 px-4 md:px-7">
+            <div className="h-8 w-44 animate-pulse rounded bg-line/60" />
+          </div>
+        </header>
+        <main id="main" className="app-main mx-auto w-full max-w-[1560px] px-4 py-6 md:px-7 md:py-7">
+          {children}
+        </main>
+      </div>
+    </div>
+  )
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <ToastProvider>
-      <ShellInner>{children}</ShellInner>
+      <React.Suspense fallback={<ShellFallback>{children}</ShellFallback>}>
+        <ShellInner>{children}</ShellInner>
+      </React.Suspense>
     </ToastProvider>
   )
 }

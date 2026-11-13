@@ -4,10 +4,24 @@ import * as React from 'react'
 import Link from 'next/link'
 import { ChevronDown, Settings, ShieldCheck, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { initials } from '@/lib/format'
+import { DEFAULT_PROFILE, PROFILE_EVENT, readProfile, type OperatorProfile } from '@/lib/preferences'
 
 export function ProfileMenu() {
   const [open, setOpen] = React.useState(false)
+  const [profile, setProfile] = React.useState<OperatorProfile>(DEFAULT_PROFILE)
   const containerRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    setProfile(readProfile())
+    const sync = () => setProfile(readProfile())
+    window.addEventListener(PROFILE_EVENT, sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener(PROFILE_EVENT, sync)
+      window.removeEventListener('storage', sync)
+    }
+  }, [])
 
   React.useEffect(() => {
     if (!open) return
@@ -30,11 +44,11 @@ export function ProfileMenu() {
         aria-label="Open profile menu"
       >
         <span className="flex size-7.5 items-center justify-center rounded-lg bg-graphite font-display text-[10px] font-semibold text-[#f8f6f0]">
-          OD
+          {initials(profile.name) || 'OD'}
         </span>
         <span className="hidden text-left xl:block">
-          <span className="block text-[11.5px] font-semibold leading-tight text-ink">Operations Desk</span>
-          <span className="block text-[9.5px] text-muted">Road intelligence</span>
+          <span className="block text-[11.5px] font-semibold leading-tight text-ink">{profile.name}</span>
+          <span className="block text-[9.5px] text-muted">{profile.team}</span>
         </span>
         <ChevronDown className={cn('size-3.5 text-muted transition-transform', open && 'rotate-180')} />
       </button>
@@ -42,7 +56,7 @@ export function ProfileMenu() {
       {open && (
         <div className="absolute right-0 top-11 z-70 w-64 overflow-hidden rounded-card border border-line bg-card shadow-float animate-rise">
           <div className="border-b border-line px-4 py-3">
-            <p className="font-display text-[13px] font-semibold text-ink">Operations Desk</p>
+            <p className="font-display text-[13px] font-semibold text-ink">{profile.name}</p>
             <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted">
               <ShieldCheck className="size-3 text-success" />
               Server-side API key active

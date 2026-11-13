@@ -1,192 +1,338 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
   Database,
   ExternalLink,
-  ShieldCheck,
-  CheckCircle2,
-  AlertCircle,
-  RefreshCw,
-  Layers,
   FileCheck2,
+  FolderSearch,
+  Info,
+  Layers,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  X,
 } from 'lucide-react'
+import {
+  PageHeader,
+  StatCard,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  Button,
+  Badge,
+  EmptyState,
+  CardSkeleton,
+  SectionLabel,
+} from '@/components/ui'
+import type { DatasetStatus } from '@/types/pitscout'
+import { clientApi } from '@/lib/client-api'
+import { formatNumber } from '@/lib/format'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
+interface ActionResult {
+  tone: 'success' | 'warning' | 'error'
+  title: string
+  message: string
+  details?: string[]
+}
+
+function errorMessage(err: any, fallback: string) {
+  const detail = err?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') return detail.detail || detail.error || fallback
+  return err?.message || fallback
+}
 
 export default function DatasetsPage() {
-  const [data, setData] = useState<any | null>(null)
+  const [data, setData] = useState<DatasetStatus | null>(null)
   const [loading, setLoading] = useState(true)
-  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [action, setAction] = useState<ActionResult | null>(null)
+  const [busy, setBusy] = useState<{ id: string; kind: 'validate' | 'prepare' } | null>(null)
 
-  const fetchStatus = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/datasets/status`)
-      if (res.ok) {
-        const json = await res.json()
-        setData(json)
-      }
-    } catch (e) {
-      console.error(e)
+      setData(await clientApi.datasets())
+    } catch (err: any) {
+      setError(errorMessage(err, 'Dataset status could not be loaded.'))
     } finally {
       setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    fetchStatus()
   }, [])
 
-  const handleValidate = async (datasetName: string) => {
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const validate = async (id: string) => {
+    setBusy({ id, kind: 'validate' })
+    setAction(null)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/datasets/validate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataset_name: datasetName }),
+      const result = await clientApi.validateDataset(id)
+      setAction({
+        tone: result.valid ? 'success' : 'warning',
+        title: result.valid ? 'Dataset images decoded successfully' : 'Dataset needs attention',
+        message: result.message || 'Validation completed without a message.',
+        details: result.corruption_details,
       })
-      const json = await res.json()
-      setActionMessage(json.detail || json.message || `Dataset validation returned HTTP ${res.status}`)
-    } catch (e: any) {
-      setActionMessage(`Error: ${e.message}`)
+    } catch (err: any) {
+      setAction({
+        tone: 'error',
+        title: 'Validation request failed',
+        message: errorMessage(err, 'The validation endpoint could not be reached.'),
+      })
+    } finally {
+      setBusy(null)
     }
   }
 
-  const handlePrepare = async (datasetName: string) => {
+  const prepare = async (id: string) => {
+    setBusy({ id, kind: 'prepare' })
+    setAction(null)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/datasets/prepare`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataset_name: datasetName }),
+      const result = await clientApi.prepareDataset(id)
+      setAction({
+        tone: 'success',
+        title: 'Preparation accepted',
+        message: result.message || result.detail || 'The backend accepted the preparation request.',
       })
-      const json = await res.json()
-      setActionMessage(json.detail || json.message || `Dataset preparation returned HTTP ${res.status}`)
-    } catch (e: any) {
-      setActionMessage(`Error: ${e.message}`)
+    } catch (err: any) {
+      setAction({
+        tone: 'error',
+        title: 'Preparation is not available',
+        message: errorMessage(err, 'The backend answered with an error.'),
+      })
+    } finally {
+      setBusy(null)
     }
   }
+
+  const datasets = data?.datasets || []
+  const ready = datasets.filter((dataset) => dataset.status === 'ready').length
+  const rawTotal = data?.summary?.total_raw_files ?? datasets.reduce((sum, item) => sum + item.raw_files, 0)
+  const processedTotal =
+    data?.summary?.total_processed_files ?? datasets.reduce((sum, item) => sum + item.processed_files, 0)
 
   return (
-    <div className="flex flex-col gap-8 py-4">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-2">
-            <Database className="h-7 w-7 text-cyan-400" />
-            Dataset Repositories &amp; Provenance
-          </h1>
-          <p className="text-xs md:text-sm text-slate-400 mt-1">
-            Official multi-national road damage corpora and AI-generation benchmarks with license verification.
-          </p>
-        </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="System"
+        title="Datasets & provenance"
+        description="Read-only inspection of the road-damage corpora declared by the backend. Counts come from a filesystem scan — no dataset is bundled with this deployment."
+        actions={
+          <Button variant="secondary" onClick={() => void load()} loading={loading}>
+            <RefreshCw />
+            Refresh status
+          </Button>
+        }
+      />
 
-        <button
-          onClick={fetchStatus}
-          className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-700"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh Status
-        </button>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Declared datasets" value={datasets.length} hint="from the backend manifest" icon={Database} tone="primary" />
+        <StatCard label="Ready" value={ready} hint="processed files present" icon={ShieldCheck} tone={ready > 0 ? 'success' : 'neutral'} />
+        <StatCard label="Raw files" value={formatNumber(rawTotal)} hint="scanned under datasets/raw" icon={FolderSearch} tone="info" />
+        <StatCard label="Processed files" value={formatNumber(processedTotal)} hint="scanned under datasets/processed" icon={Layers} tone={processedTotal > 0 ? 'success' : 'neutral'} />
       </div>
 
-      {actionMessage && (
-        <div className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3.5 text-xs text-cyan-300">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-cyan-400" />
-          <span>{actionMessage}</span>
+      <div className="flex items-start gap-3 rounded-xl border border-info/20 bg-info-soft p-4">
+        <Info className="mt-0.5 size-4 shrink-0 text-info" />
+        <div className="text-[11.5px] leading-relaxed text-info">
+          <p className="font-semibold">Validation decodes images; preparation is deliberately unimplemented</p>
+          <p className="mt-0.5 opacity-90">
+            <span className="font-medium">Validate</span> opens every image under the declared source path and reports
+            decode failures. <span className="font-medium">Prepare</span> currently returns HTTP 501 from the backend, because
+            annotation conversion and train/val splitting are not implemented. Supply a YOLO-format dataset and{' '}
+            <span className="font-mono">data.yaml</span> instead.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-critical/20 bg-critical-soft p-3.5 text-[12px] text-critical">
+          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          <span className="flex-1">{error}</span>
+          <Button variant="ghost" size="sm" onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {action && (
+        <div
+          className={`rounded-xl border p-4 ${
+            action.tone === 'success'
+              ? 'border-success/20 bg-success-soft'
+              : action.tone === 'warning'
+                ? 'border-warning/25 bg-warning-soft'
+                : 'border-critical/20 bg-critical-soft'
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            {action.tone === 'success' ? (
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+            ) : action.tone === 'warning' ? (
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+            ) : (
+              <AlertCircle className="mt-0.5 size-4 shrink-0 text-critical" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p
+                className={`text-[12.5px] font-semibold ${
+                  action.tone === 'success' ? 'text-success' : action.tone === 'warning' ? 'text-warning' : 'text-critical'
+                }`}
+              >
+                {action.title}
+              </p>
+              <p className="mt-1 whitespace-pre-line text-[11.5px] leading-relaxed text-secondary">{action.message}</p>
+              {action.details && action.details.length > 0 && (
+                <ul className="mt-2 max-h-40 space-y-0.5 overflow-y-auto rounded-lg border border-line bg-card p-2 font-mono text-[10px] text-secondary">
+                  {action.details.map((detail, index) => (
+                    <li key={index} className="break-all">
+                      {detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <button
+              onClick={() => setAction(null)}
+              className="rounded p-0.5 text-muted transition hover:text-ink"
+              aria-label="Dismiss dataset result"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
       )}
 
       {loading ? (
-        <div className="flex min-h-[300px] items-center justify-center text-slate-400">
-          <RefreshCw className="h-6 w-6 animate-spin text-cyan-400" />
+        <div className="grid gap-5 lg:grid-cols-2">
+          <CardSkeleton />
+          <CardSkeleton />
         </div>
+      ) : datasets.length === 0 ? (
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={Database}
+              title="No datasets declared"
+              description="The backend manifest returned no datasets. Check the API health diagnostic in Settings."
+            />
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2">
-          {data?.datasets?.map((ds: any) => (
-            <div
-              key={ds.id}
-              className="flex flex-col justify-between rounded-2xl border border-white/10 bg-[#111C2E] p-6 shadow-xl"
-            >
-              <div>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <span className="text-xs font-mono uppercase text-cyan-400 font-bold">
-                      {ds.id}
-                    </span>
-                    <h3 className="text-lg font-bold text-white mt-1">{ds.name}</h3>
+        <div className="grid gap-5 lg:grid-cols-2">
+          {datasets.map((dataset) => {
+            const isReady = dataset.status === 'ready'
+            return (
+              <Card key={dataset.id} className="flex flex-col">
+                <CardHeader>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <SectionLabel>{dataset.id}</SectionLabel>
+                      <Badge tone={isReady ? 'success' : 'warning'} dot>
+                        {isReady ? 'Ready' : dataset.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </div>
+                    <CardTitle className="mt-1.5">{dataset.name}</CardTitle>
+                    <CardDescription>
+                      Licence: <span className="font-medium text-graphite">{dataset.licence}</span>
+                    </CardDescription>
                   </div>
-                  <span
-                    className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${
-                      ds.status === 'ready'
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                        : 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                    }`}
-                  >
-                    {ds.status.toUpperCase()}
-                  </span>
-                </div>
-
-                <div className="mt-4 flex flex-col gap-2 text-xs text-slate-300">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">License:</span>
-                    <span className="font-mono text-cyan-300 font-bold">{ds.licence}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Official Source:</span>
-                    <a
-                      href={ds.source}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 text-cyan-400 hover:underline"
-                    >
-                      Repository <ExternalLink className="h-3 w-3" />
+                  <Button variant="secondary" size="sm" asChild>
+                    <a href={dataset.source} target="_blank" rel="noreferrer">
+                      Source
+                      <ExternalLink />
                     </a>
+                  </Button>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-4">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-3">
+                      <p className="label-mono text-[9px]">Raw files</p>
+                      <p className="mt-1 font-display text-xl font-semibold text-ink tabular">
+                        {formatNumber(dataset.raw_files)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-3">
+                      <p className="label-mono text-[9px]">Processed files</p>
+                      <p className="mt-1 font-display text-xl font-semibold text-ink tabular">
+                        {formatNumber(dataset.processed_files)}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Raw Files Found:</span>
-                    <span className="font-mono text-white">{ds.raw_files}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Processed Files:</span>
-                    <span className="font-mono text-white">{ds.processed_files}</span>
-                  </div>
-                </div>
 
-                <div className="mt-4 border-t border-white/5 pt-3">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Target Classes:
-                  </span>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {ds.classes?.map((c: string, idx: number) => (
-                      <span
-                        key={idx}
-                        className="rounded bg-slate-900 border border-white/5 px-2 py-0.5 text-[10px] font-mono text-slate-300"
-                      >
-                        {c}
-                      </span>
-                    ))}
+                  <div>
+                    <p className="label-mono text-[9px]">Declared classes</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {dataset.classes.map((name) => (
+                        <span
+                          key={name}
+                          className="rounded-md border border-line bg-card px-2 py-0.5 font-mono text-[10px] text-secondary"
+                        >
+                          {name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              <div className="mt-6 flex items-center gap-3 border-t border-white/10 pt-4">
-                <button
-                  onClick={() => handleValidate(ds.id)}
-                  className="flex-1 rounded-lg border border-white/10 bg-slate-800 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                >
-                  Validate Dataset
-                </button>
-                <button
-                  onClick={() => handlePrepare(ds.id)}
-                  className="flex-1 rounded-lg bg-cyan-500/20 border border-cyan-500/30 py-2 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/30"
-                >
-                  Prepare for Training
-                </button>
-              </div>
-            </div>
-          ))}
+                  {dataset.raw_files === 0 && (
+                    <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-muted">
+                      <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                      No raw files were found for this dataset. Validation will report zero checked images until the corpus
+                      is placed under the source path.
+                    </p>
+                  )}
+
+                  <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void validate(dataset.id)}
+                      disabled={busy != null}
+                    >
+                      {busy?.id === dataset.id && busy.kind === 'validate' ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <FileCheck2 />
+                      )}
+                      Validate images
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void prepare(dataset.id)}
+                      disabled={busy != null}
+                      title="The backend currently answers HTTP 501 for this request."
+                    >
+                      {busy?.id === dataset.id && busy.kind === 'prepare' ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <Layers />
+                      )}
+                      Prepare for training
+                    </Button>
+                    <span className="ml-auto font-mono text-[9.5px] text-muted">prepare → 501</span>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
+
+      <p className="flex items-start gap-2 border-t border-line pt-4 text-[10.5px] leading-relaxed text-muted">
+        <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+        Licence terms are reported exactly as declared by the backend manifest. Raw and processed corpora are ignored by
+        version control and are not redistributed with this application.
+      </p>
     </div>
   )
 }

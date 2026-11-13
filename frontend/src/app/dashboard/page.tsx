@@ -76,6 +76,11 @@ export default function DashboardPage() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = React.useState<Date | null>(null)
+  const [nowMs, setNowMs] = React.useState<number | null>(null)
+
+  React.useEffect(() => {
+    setNowMs(Date.now())
+  }, [])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -136,9 +141,10 @@ export default function DashboardPage() {
   )
 
   const throughput = React.useMemo(() => {
+    if (nowMs === null) return []
     const items = inspections?.items || []
     const days = Array.from({ length: 14 }).map((_, index) => {
-      const date = new Date()
+      const date = new Date(nowMs)
       date.setHours(0, 0, 0, 0)
       date.setDate(date.getDate() - (13 - index))
       return date
@@ -151,7 +157,7 @@ export default function DashboardPage() {
         inspections: count,
       }
     })
-  }, [inspections])
+  }, [inspections, nowMs])
 
   const throughputTotal = throughput.reduce((sum, day) => sum + day.inspections, 0)
 
@@ -193,12 +199,15 @@ export default function DashboardPage() {
 
   const totalDecisions = decisionCounts.MATCH + decisionCounts.UNCERTAIN + decisionCounts.NO_MATCH
 
-  const dateLabel = new Date().toLocaleDateString(undefined, {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  })
+  const dateLabel =
+    nowMs === null
+      ? ''
+      : new Date(nowMs).toLocaleDateString(undefined, {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })
 
   if (loading && !overview && !inspections) {
     return (
@@ -318,7 +327,7 @@ export default function DashboardPage() {
           <CardContent className="pt-4">
             <div className="h-[248px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={throughput} margin={{ top: 6, right: 8, left: -18, bottom: 0 }}>
+                <AreaChart data={throughput} margin={{ top: 6, right: 20, left: -18, bottom: 0 }}>
                   <defs>
                     <linearGradient id="throughputFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={CHART.primary} stopOpacity={0.28} />
@@ -341,6 +350,7 @@ export default function DashboardPage() {
                     name="Inspections"
                     stroke={CHART.primary}
                     strokeWidth={2}
+                    isAnimationActive={false}
                     fill="url(#throughputFill)"
                     activeDot={{ r: 4, fill: CHART.primary, stroke: '#fff', strokeWidth: 2 }}
                   />
@@ -387,6 +397,7 @@ export default function DashboardPage() {
                         outerRadius={86}
                         paddingAngle={2}
                         strokeWidth={0}
+                        isAnimationActive={false}
                       >
                         {severityData.map((entry) => (
                           <Cell key={entry.level} fill={entry.color} />

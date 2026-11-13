@@ -217,6 +217,12 @@ counts; `/analytics` and `/dashboard` rendered backend data (14–15 inspections
 | Dashboard rendered report links for rejected inspections without an analysis | Link is gated on `analysis_id` and `status === 'completed'`; shows "No analysis" otherwise |
 | Next dev server pages never hydrated in this environment | Verification switched to a production build (`npm run build` + `npm start`), which works |
 | Port 3000 stayed occupied by an orphaned child process after stopping the task | Identified the listening PID and terminated that specific process before restart |
+| `/reports` requested `page_size=200`, but `GET /api/v1/pothole-reports` caps pagination at 100, so the endpoint returned HTTP 422 and the entire submission log rendered as empty | The page now loads the reports list in pages of 100 up to the existing 200-record client cap; browser-verified 5 real reports with statuses, decisions and canonical links |
+| Inspection dossier fetched the API directly without the M2M key and used `NEXT_PUBLIC_API_URL` | Dossier now uses the authenticated same-origin proxy and same-origin evidence image routes; browser-verified original and annotated evidence render |
+| Dossier printed the 0–100 quality score through `formatPercent`, producing "10000%" | Switched to `formatRatioPercent` for the ratio-scaled value |
+| Under `cacheComponents`, `/analytics` and `/dashboard` read `new Date()` during prerender, and the shell read `usePathname()` without a Suspense boundary, failing the build | Current time is read after mount; the shell is wrapped in `Suspense` with a static fallback; production build now completes 33/33 routes |
+| Dashboard/analytics Recharts areas and donut rendered blank in captured screenshots because animation reveals were stalled at t=0 | Disabled chart mount animation for deterministic rendering; verified both charts draw with real data |
+| Erroring pages showed a misleading "No reports/potholes yet" empty state while the request was failing (observed when the backend rate limiter answered 429) | `/reports`, `/map` and `/potholes` now render an "unavailable" empty state with a Retry action whenever the request fails and no records are loaded |
 
 ---
 
@@ -251,3 +257,62 @@ port **8001**.
 - **Deployment**: no cloud deployment was performed. Only local processes were verified.
 - **Feedback persistence and evidence cleanup on inspection delete** remain unfixed and are
   documented in `DEVELOPMENT_ROADMAP.md`.
+
+---
+
+## 6. Frontend redesign verification (light theme)
+
+The redesigned UI was exercised against the real PitScout backend on port 8001 through the
+Next.js proxy. Rendering verification used headless Chrome
+(`--headless=new --dump-dom/--screenshot --virtual-time-budget`) because the in-app browser MCP
+reported `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE` (0×0 viewport), and neither Playwright nor
+Puppeteer is installed. Screenshots and DOM dumps were captured per route; no mock data was
+introduced for verification.
+
+### 6.1 Build and static checks
+
+```
+cd frontend
+npx tsc --noEmit    → no output (clean)
+npm run build       → 33/33 routes generated; /reports/[id] is Partial Prerender; all /api/v1
+                      proxy handlers compiled
+```
+
+### 6.2 Routes rendered with live backend data
+
+Each route returned HTTP 200 and rendered real records during this pass:
+
+| Route | Observed content |
+| --- | --- |
+| `/dashboard` | 24 inspections, model health tiles, throughput chart, recent inspections |
+| `/inspect` | upload workspace and pipeline stages |
+| `/video` | video jobs, tracked defects, keyframe evidence |
+| `/report` | report form, duplicate decision panel, evidence hash |
+| `/reports` | 5 preserved reports with statuses, duplicate decisions/scores, canonical links |
+| `/reports/[id]` | inspection dossier with authenticated original + annotated images, defect table |
+| `/map` | 1 canonical record plotted on the offline coordinate grid, 0 awaiting location |
+| `/potholes` | 1 canonical record `PS-20261113-4EF934`, VERIFIED, HIGH, 4 linked reports |
+| `/duplicates` | duplicate decisions and MATCH/UNCERTAIN/NOMATCH/SKIPPED breakdown |
+| `/analytics` | severity donut and volume trend with real data |
+| `/users` | role directory persisted in `localStorage` |
+| `/settings` | profile and appearance preferences persisted in `localStorage` |
+| `/datasets`, `/training` | real dataset manifest, provenance and honest 501 training response |
+
+The `/reports` fix described in section 3 was confirmed in the browser: the page previously
+showed an empty log because of the HTTP 422; it now lists the 5 stored reports.
+
+### 6.3 Interactive testing limitation
+
+The verification above covers render-time behaviour with real data plus the error/empty and
+retry branches (observed while the backend rate limiter returned 429). Interactive flows
+(drawer open/close, status transitions, file uploads, form submits) were exercised earlier in
+the session as recorded in sections 2.2–2.6, but could not be re-driven in a real browser during
+this pass because no usable browser viewport was available. No interactive behaviour is claimed
+as verified beyond what those sections record.
+
+### 6.4 Rate limiting observed
+
+The backend enforces `60 requests/minute` per key in-process. Rapid headless navigation across
+13 routes exceeded that budget and produced `Rate limit exceeded. Retry later.` responses. This
+is backend behaviour, not a frontend defect; the UI now surfaces it as an explicit error state
+with Retry instead of an empty-record message.

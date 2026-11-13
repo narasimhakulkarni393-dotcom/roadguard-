@@ -1,52 +1,88 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { useDropzone } from 'react-dropzone'
 import {
-  MapPin,
-  UploadCloud,
-  Loader2,
   AlertCircle,
+  ArrowRight,
   CheckCircle2,
-  ShieldQuestion,
-  Crosshair,
   Copy,
+  Crosshair,
+  ExternalLink,
+  Image as ImageIcon,
+  Info,
   Layers,
+  Loader2,
+  MapPin,
   Navigation,
+  RefreshCw,
+  ShieldQuestion,
+  UploadCloud,
+  X,
 } from 'lucide-react'
+import {
+  PageHeader,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  Button,
+  Badge,
+  SeverityBadge,
+  StatusBadge,
+  DecisionBadge,
+  Progress,
+  Field,
+  Input,
+  Textarea,
+  SectionLabel,
+  EmptyState,
+  useToast,
+} from '@/components/ui'
+import type { PotholeReport } from '@/types/pitscout'
+import { clientApi } from '@/lib/client-api'
+import { classLabel, coordinate, formatDateTime, formatPercent } from '@/lib/format'
 
-interface PotholeReport {
-  report_id: string
-  pothole_id: string | null
-  status: string
-  match: {
-    decision: string
-    score: number | null
-    reason: string | null
-    signals: any
-  }
-  location: {
-    latitude: number | null
-    longitude: number | null
-    accuracy_m: number | null
-    status: string
-    note: string | null
-  }
-  detection: { class: string | null; confidence: number | null; severity: string | null }
-  captured_at: string | null
-  created_at: string | null
-  description: string | null
-  evidence: { evidence_id: string; kind: string; sha256: string; width: number; height: number; url: string }[]
-  idempotent_replay?: boolean
+const DECISION_COPY: Record<string, { title: string; body: string; tone: 'success' | 'warning' | 'info' | 'neutral' }> = {
+  MATCH: {
+    title: 'Linked to an existing canonical pothole',
+    body: 'The duplicate engine found an existing record whose visual and shape signals cleared the policy thresholds. This report stays preserved and is linked to that record.',
+    tone: 'success',
+  },
+  UNCERTAIN: {
+    title: 'Uncertain — human review required',
+    body: 'The signals were not strong enough to confirm a duplicate. This report is queued for review and is not attached to any canonical record until a person confirms it.',
+    tone: 'warning',
+  },
+  NO_MATCH: {
+    title: 'No duplicate found',
+    body: 'No nearby record cleared the visual and shape thresholds. This submission is preserved as its own report.',
+    tone: 'info',
+  },
+  SKIPPED: {
+    title: 'Duplicate matching did not run',
+    body: 'The report was stored, but the duplicate engine recorded no decision. Review it in the duplicate centre before treating it as unique.',
+    tone: 'neutral',
+  },
 }
 
-const DECISION_STYLE: Record<string, string> = {
-  MATCH: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  UNCERTAIN: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  NO_MATCH: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
-  SKIPPED: 'border-slate-500/30 bg-slate-500/10 text-slate-300',
+function errorMessage(err: any, fallback: string) {
+  const detail = err?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') return detail.detail || detail.error || fallback
+  return err?.message || fallback
+}
+
+function parseNumber(value: string) {
+  if (!value.trim()) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 export default function ReportPotholePage() {
+  const { toast } = useToast()
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [description, setDescription] = useState('')
@@ -58,10 +94,12 @@ export default function ReportPotholePage() {
   const [gpsMessage, setGpsMessage] = useState<string | null>(null)
   const [idempotencyKey, setIdempotencyKey] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<PotholeReport | null>(null)
   const [relocateAccuracy, setRelocateAccuracy] = useState('')
   const [relocateBusy, setRelocateBusy] = useState(false)
+  const previewRef = useRef<string | null>(null)
 
   useEffect(() => {
     setIdempotencyKey(
@@ -71,10 +109,55 @@ export default function ReportPotholePage() {
     )
   }, [file])
 
+  useEffect(() => {
+    return () => {
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+    }
+  }, [])
+
+  const selectFile = useCallback((selected: File | null) => {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+    const nextPreview = selected ? URL.createObjectURL(selected) : null
+    previewRef.current = nextPreview
+    setPreviewUrl(nextPreview)
+    setFile(selected)
+    setReport(null)
+    setError(null)
+    setUploadProgress(0)
+  }, [])
+
+  const onDrop = useCallback(
+    (accepted: File[]) => {
+      if (accepted.length > 0) selectFile(accepted[0])
+    },
+    [selectFile]
+  )
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
+    onDrop,
+    onDropRejected: (rejections) => {
+      const reason = rejections[0]?.errors?.[0]?.code
+      setError(
+        reason === 'file-too-large'
+          ? 'That image is larger than 50 MB. Resize it and try again.'
+          : reason === 'file-invalid-type'
+            ? 'Unsupported file type. Use JPEG, PNG, WEBP or BMP.'
+            : 'The image could not be accepted. Check the file and try again.'
+      )
+    },
+    accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.bmp'] },
+    maxSize: 50 * 1024 * 1024,
+    multiple: false,
+    noClick: Boolean(previewUrl),
+    noDrag: Boolean(previewUrl),
+  })
+
   const captureLocation = () => {
-    if (!navigator.geolocation) {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
       setGpsState('unavailable')
-      setGpsMessage('This browser does not expose the Geolocation API. The report will stay pending location verification.')
+      setGpsMessage(
+        'This browser does not expose the Geolocation API. The report will stay pending location verification until coordinates are added.'
+      )
       return
     }
     setGpsState('acquiring')
@@ -88,7 +171,7 @@ export default function ReportPotholePage() {
         setGpsMessage(
           position.coords.accuracy
             ? `Location captured in-browser with ±${Math.round(position.coords.accuracy)} m reported accuracy.`
-            : 'Location captured in-browser. Accuracy was not reported by the device.'
+            : 'Location captured in-browser. The device did not report an accuracy radius.'
         )
       },
       (geoError) => {
@@ -101,12 +184,39 @@ export default function ReportPotholePage() {
     )
   }
 
+  const clearLocation = () => {
+    setLatitude('')
+    setLongitude('')
+    setAccuracy('')
+    setGpsState('unknown')
+    setGpsMessage(null)
+  }
+
+  const validateCoordinates = () => {
+    const lat = parseNumber(latitude)
+    const lon = parseNumber(longitude)
+    const acc = parseNumber(accuracy)
+    if ((lat == null) !== (lon == null)) {
+      return 'Enter both latitude and longitude, or leave both blank to keep the report pending location verification.'
+    }
+    if (lat != null && (lat < -90 || lat > 90)) return 'Latitude must be between -90 and 90.'
+    if (lon != null && (lon < -180 || lon > 180)) return 'Longitude must be between -180 and 180.'
+    if (acc != null && acc < 0) return 'Accuracy must be a positive number of metres.'
+    return null
+  }
+
   const submit = async () => {
     if (!file) {
       setError('Select a photo of the pothole first.')
       return
     }
+    const coordinateError = validateCoordinates()
+    if (coordinateError) {
+      setError(coordinateError)
+      return
+    }
     setIsSubmitting(true)
+    setUploadProgress(0)
     setError(null)
     try {
       const formData = new FormData()
@@ -118,16 +228,18 @@ export default function ReportPotholePage() {
       if (accuracy.trim()) formData.append('accuracy_m', accuracy.trim())
       formData.append('captured_at', new Date().toISOString())
 
-      const res = await fetch('/api/v1/pothole-reports', {
-        method: 'POST',
-        headers: { 'Idempotency-Key': idempotencyKey },
-        body: formData,
+      const result = await clientApi.submitReport(formData, idempotencyKey, setUploadProgress)
+      setReport(result)
+      toast({
+        tone: result.location.status === 'verified' ? 'success' : 'info',
+        title: result.idempotent_replay ? 'Original report returned' : 'Report stored',
+        description:
+          result.location.status === 'verified'
+            ? 'Coordinates were accepted and the duplicate decision is ready.'
+            : 'No verified coordinates were supplied, so the report stays pending location verification.',
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.detail || `HTTP ${res.status}`)
-      setReport(json)
     } catch (err: any) {
-      setError(err.message || 'Report submission failed.')
+      setError(errorMessage(err, 'Report submission failed.'))
     } finally {
       setIsSubmitting(false)
     }
@@ -135,327 +247,693 @@ export default function ReportPotholePage() {
 
   const relocate = async () => {
     if (!report) return
-    if (!latitude.trim() || !longitude.trim()) {
-      setError('Enter a latitude and longitude before relocating the report.')
+    const lat = parseNumber(latitude)
+    const lon = parseNumber(longitude)
+    const acc = parseNumber(relocateAccuracy)
+    if (lat == null || lon == null) {
+      setError('Enter a latitude and longitude before saving a corrected location.')
+      return
+    }
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      setError('Latitude must be within ±90 and longitude within ±180.')
       return
     }
     setRelocateBusy(true)
     setError(null)
     try {
-      const res = await fetch(`/api/v1/pothole-reports/${report.report_id}/location`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          accuracy_m: relocateAccuracy.trim() ? Number(relocateAccuracy) : null,
-        }),
+      const updated = await clientApi.relocateReport(report.report_id, {
+        latitude: lat,
+        longitude: lon,
+        accuracy_m: acc != null && acc >= 0 ? acc : null,
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.detail || `HTTP ${res.status}`)
-      setReport(json)
+      setReport(updated)
+      toast({
+        tone: 'success',
+        title: 'Location updated',
+        description: 'The corrected coordinates were accepted for this report.',
+      })
     } catch (err: any) {
-      setError(err.message || 'Location update failed.')
+      setError(errorMessage(err, 'Location update failed.'))
     } finally {
       setRelocateBusy(false)
     }
   }
 
-  const matchSignals = report?.match.signals?.signals ?? report?.match.signals ?? null
+  const copyReportId = async () => {
+    if (!report) return
+    try {
+      await navigator.clipboard?.writeText(report.report_id)
+      toast({ tone: 'success', title: 'Report ID copied' })
+    } catch {
+      toast({ tone: 'error', title: 'Clipboard unavailable', description: 'Select the ID manually and copy it.' })
+    }
+  }
+
+  const resetForm = () => {
+    selectFile(null)
+    setDescription('')
+    setReporterId('')
+    clearLocation()
+    setRelocateAccuracy('')
+    setReport(null)
+    setError(null)
+  }
+
+  const lat = parseNumber(latitude)
+  const lon = parseNumber(longitude)
+  const acc = parseNumber(accuracy)
+  const hasCoordinates = lat != null && lon != null
+  const decision = (report?.match.decision || 'SKIPPED').toUpperCase()
+  const decisionCopy = DECISION_COPY[decision] || DECISION_COPY.SKIPPED
+  const audit = report?.match.signals || null
+  const metrics = audit?.signals || null
+  const policy = audit?.policy || null
 
   return (
-    <div className="flex flex-col gap-8 py-4">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-2">
-            <MapPin className="h-7 w-7 text-cyan-400" />
-            Report a Pothole
-          </h1>
-          <p className="text-xs md:text-sm text-slate-400 mt-1">
-            Submit geotagged evidence. Coordinates come only from your device or explicit manual entry; the server never invents a location.
-          </p>
-        </div>
-      </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Field capture"
+        title="Report a pothole"
+        description="Submit photographic evidence from the road. Coordinates come only from your device or explicit manual entry — if neither is available the report stays pending location verification."
+        actions={
+          <>
+            <Button variant="secondary" asChild>
+              <Link href="/duplicates">
+                Duplicate centre
+                <ArrowRight />
+              </Link>
+            </Button>
+            <Button variant="secondary" asChild>
+              <Link href="/reports">
+                Submission log
+                <ArrowRight />
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
-      <div className="grid gap-6 lg:grid-cols-12">
-        <div className="lg:col-span-6 flex flex-col gap-4 rounded-2xl border border-white/10 bg-[#111C2E] p-6 shadow-xl">
-          <label
-            htmlFor="pothole-photo"
-            className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-white/15 p-4 text-center transition hover:border-cyan-500/40"
-          >
-            {previewUrl ? (
-              <img src={previewUrl} alt="Pothole preview" className="max-h-52 rounded-lg object-contain" />
-            ) : (
-              <>
-                <UploadCloud className="h-9 w-9 text-cyan-400" />
-                <span className="text-sm font-bold text-white">Add pothole photograph</span>
-                <span className="text-[11px] text-slate-400">JPEG, PNG, WEBP or BMP up to 50 MB.</span>
-              </>
-            )}
-            <input
-              id="pothole-photo"
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/bmp"
-              className="hidden"
-              onChange={(e) => {
-                const selected = e.target.files?.[0] || null
-                setFile(selected)
-                setPreviewUrl(selected ? URL.createObjectURL(selected) : null)
-                setReport(null)
-                setError(null)
-              }}
-            />
-          </label>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-300 block mb-1.5">Description (optional)</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              maxLength={2000}
-              placeholder="Lane, direction, approximate size, nearby landmarks."
-              className="w-full rounded-lg border border-white/10 bg-slate-900 p-2.5 text-xs text-white placeholder:text-slate-500"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-300 block mb-1.5">Reporter ID (optional)</label>
-              <input
-                value={reporterId}
-                onChange={(e) => setReporterId(e.target.value)}
-                maxLength={64}
-                className="w-full rounded-lg border border-white/10 bg-slate-900 p-2.5 text-xs text-white"
-                placeholder="surveyor-07"
-              />
-            </div>
-            <div className="flex items-end">
-              <button
-                type="button"
-                onClick={captureLocation}
-                className="flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20"
-              >
-                {gpsState === 'acquiring' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Crosshair className="h-4 w-4" />
-                )}
-                Use Device GPS
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <NumberField label="Latitude" value={latitude} onChange={setLatitude} />
-            <NumberField label="Longitude" value={longitude} onChange={setLongitude} />
-            <NumberField label="Accuracy (m)" value={accuracy} onChange={setAccuracy} />
-          </div>
-
-          {gpsMessage && (
-            <div
-              className={`flex items-start gap-2 rounded-xl border p-3 text-[11px] ${
-                gpsState === 'acquired'
-                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                  : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-              }`}
-            >
-              {gpsState === 'acquired' ? (
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-              ) : (
-                <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
-              )}
-              <span>{gpsMessage}</span>
-            </div>
-          )}
-
-          <button
-            onClick={submit}
-            disabled={isSubmitting}
-            className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-teal-400 py-3 text-sm font-bold text-slate-950 shadow-md shadow-cyan-500/20 hover:brightness-110 disabled:opacity-50"
-          >
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
-            {isSubmitting ? 'Submitting Report...' : 'Submit Pothole Report'}
-          </button>
-
-          {error && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-red-300">
-              <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
-
-        <div className="lg:col-span-6 flex flex-col gap-4">
-          {!report ? (
-            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-2xl border border-white/10 bg-[#111C2E] p-8 text-center text-slate-500">
-              <ShieldQuestion className="h-10 w-10 mb-3 opacity-40" />
-              <p className="text-xs max-w-sm">
-                After submission you will see the detector result, the duplicate-matching decision with its score and signals,
-                and the GPS verification status of this report.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="rounded-2xl border border-white/10 bg-[#111C2E] p-5">
-                <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                  <div>
-                    <span className="text-[10px] font-mono uppercase text-slate-400">Report</span>
-                    <div className="font-mono text-sm text-cyan-400 flex items-center gap-1.5">
-                      {report.report_id}
-                      <button
-                        onClick={() => navigator.clipboard?.writeText(report.report_id)}
-                        className="text-slate-500 hover:text-white"
-                        title="Copy report ID"
-                      >
-                        <Copy className="h-3 w-3" />
-                      </button>
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="flex flex-col gap-5 lg:col-span-7">
+          <Card>
+            <CardHeader>
+              <div>
+                <SectionLabel>01 · Evidence</SectionLabel>
+                <CardTitle className="mt-1.5">Photograph the defect</CardTitle>
+                <CardDescription>
+                  One image per report. The original file, its dimensions and its SHA-256 hash are preserved.
+                </CardDescription>
+              </div>
+              <Badge tone={file ? 'success' : 'neutral'} dot>
+                {file ? 'Photo ready' : 'No photo'}
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {previewUrl ? (
+                <div className="overflow-hidden rounded-panel border border-line bg-[#fbf9f3]">
+                  <img src={previewUrl} alt="Pothole evidence preview" className="max-h-[320px] w-full object-contain" />
+                  <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-[12.5px] font-medium text-ink">{file?.name}</p>
+                      <p className="font-mono text-[10.5px] text-muted">
+                        {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : ''}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button variant="secondary" size="sm" onClick={open}>
+                        <RefreshCw />
+                        Replace
+                      </Button>
+                      <Button variant="ghost" size="iconSm" onClick={() => selectFile(null)} aria-label="Remove photo">
+                        <X />
+                      </Button>
                     </div>
                   </div>
-                  <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase text-cyan-300">
-                    {report.status.replace(/_/g, ' ')}
+                </div>
+              ) : (
+                <div
+                  {...getRootProps()}
+                  className={`flex min-h-[220px] cursor-pointer flex-col items-center justify-center gap-3 rounded-panel border-2 border-dashed px-6 py-10 text-center transition-colors ${
+                    isDragActive
+                      ? 'border-primary/60 bg-soft'
+                      : 'border-line bg-[#fbf9f3] hover:border-primary/40 hover:bg-[#fdf8f0]'
+                  }`}
+                >
+                  <input {...getInputProps()} />
+                  <span className="flex size-12 items-center justify-center rounded-xl border border-line bg-card text-primary shadow-[0_1px_2px_rgba(37,39,32,0.05)]">
+                    <UploadCloud className="size-5" />
                   </span>
+                  <div>
+                    <p className="font-display text-sm font-semibold text-ink">
+                      {isDragActive ? 'Drop the photo here' : 'Drag a photo here, or browse'}
+                    </p>
+                    <p className="mt-1 text-[11.5px] text-muted">JPEG, PNG, WEBP or BMP · up to 50 MB</p>
+                  </div>
                 </div>
+              )}
 
-                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                  <Field label="Canonical pothole" value={report.pothole_id || 'Not linked'} mono />
-                  <Field
-                    label="Detected class"
-                    value={report.detection.class ? report.detection.class.replace(/_/g, ' ') : 'Not detected'}
-                  />
-                  <Field
-                    label="Detector confidence"
-                    value={
-                      report.detection.confidence != null
-                        ? `${Math.round(report.detection.confidence * 100)}%`
-                        : '—'
-                    }
-                  />
-                  <Field label="Severity" value={report.detection.severity || '—'} />
-                </div>
+              <Field
+                label="Description (optional)"
+                htmlFor="report-description"
+                hint="Lane, direction, approximate size and nearby landmarks. Do not guess what the detector will find."
+              >
+                <Textarea
+                  id="report-description"
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                  rows={4}
+                  maxLength={2000}
+                  placeholder="Right-hand lane heading north, roughly 40 cm wide, beside the school gate."
+                />
+              </Field>
 
-                {report.idempotent_replay && (
-                  <p className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-2 text-[11px] text-cyan-200">
-                    This submission reused an idempotency key; the original report was returned instead of creating a duplicate.
-                  </p>
+              <Field label="Reporter ID (optional)" htmlFor="report-reporter" hint="Free-text identifier; no account is created.">
+                <Input
+                  id="report-reporter"
+                  value={reporterId}
+                  onChange={(event) => setReporterId(event.target.value)}
+                  maxLength={64}
+                  placeholder="surveyor-07"
+                />
+              </Field>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <SectionLabel>02 · Location</SectionLabel>
+                <CardTitle className="mt-1.5">Attach coordinates you actually have</CardTitle>
+                <CardDescription>
+                  Use the device GPS, type surveyed coordinates, or leave this blank. A blank location is stored as{' '}
+                  <span className="font-medium text-graphite">pending location verification</span>.
+                </CardDescription>
+              </div>
+              <Badge tone={hasCoordinates ? 'success' : 'warning'} dot>
+                {hasCoordinates ? 'Coordinates ready' : 'Pending location'}
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button variant="soft" onClick={captureLocation} disabled={gpsState === 'acquiring'}>
+                  {gpsState === 'acquiring' ? <Loader2 className="animate-spin" /> : <Crosshair />}
+                  {gpsState === 'acquiring' ? 'Requesting device GPS…' : 'Use device GPS'}
+                </Button>
+                {(latitude || longitude || accuracy) && (
+                  <Button variant="ghost" onClick={clearLocation}>
+                    Clear coordinates
+                  </Button>
                 )}
               </div>
 
-              <div className={`rounded-2xl border p-5 ${DECISION_STYLE[report.match.decision] || DECISION_STYLE.SKIPPED}`}>
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold uppercase tracking-wider">
-                    Duplicate Decision: {report.match.decision.replace(/_/g, ' ')}
-                  </h3>
-                  {report.match.score != null && (
-                    <span className="font-mono text-xs">score {report.match.score.toFixed(3)}</span>
-                  )}
-                </div>
-                <p className="mt-2 text-[11px] opacity-90">{report.match.reason || 'No matching decision recorded.'}</p>
-                {matchSignals && (
-                  <div className="mt-3 grid grid-cols-2 gap-2 font-mono text-[10px] opacity-90">
-                    <span>distance: {matchSignals.distance_m ?? '—'} m</span>
-                    <span>radius: {matchSignals.radius_m ?? '—'} m</span>
-                    <span>visual: {matchSignals.visual_similarity ?? '—'}</span>
-                    <span>shape: {matchSignals.shape_similarity ?? '—'}</span>
-                  </div>
-                )}
-                <p className="mt-3 text-[10px] opacity-75">
-                  Proximity alone never merges records. A merge requires the visual and shape signals to clear policy thresholds.
-                </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label="Latitude" htmlFor="report-latitude">
+                  <Input
+                    id="report-latitude"
+                    value={latitude}
+                    onChange={(event) => setLatitude(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="—"
+                    className="font-mono"
+                  />
+                </Field>
+                <Field label="Longitude" htmlFor="report-longitude">
+                  <Input
+                    id="report-longitude"
+                    value={longitude}
+                    onChange={(event) => setLongitude(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="—"
+                    className="font-mono"
+                  />
+                </Field>
+                <Field label="Accuracy (m)" htmlFor="report-accuracy">
+                  <Input
+                    id="report-accuracy"
+                    value={accuracy}
+                    onChange={(event) => setAccuracy(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="—"
+                    className="font-mono"
+                  />
+                </Field>
               </div>
 
               <div
-                className={`rounded-2xl border p-5 ${
-                  report.location.status === 'verified'
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                    : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                className={`rounded-xl border p-3 text-[11.5px] leading-relaxed ${
+                  hasCoordinates
+                    ? 'border-success/20 bg-success-soft text-success'
+                    : 'border-warning/25 bg-warning-soft text-warning'
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
-                  <Navigation className="h-4 w-4" />
-                  Location: {report.location.status.replace(/_/g, ' ')}
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[11px]">
-                  <span>lat: {report.location.latitude ?? '—'}</span>
-                  <span>lon: {report.location.longitude ?? '—'}</span>
-                  <span>±{report.location.accuracy_m ?? '—'} m</span>
-                </div>
-                {report.location.note && <p className="mt-2 text-[11px] opacity-90">{report.location.note}</p>}
-
-                {report.location.status !== 'verified' && !report.pothole_id && (
-                  <div className="mt-4 border-t border-white/10 pt-3">
-                    <span className="text-[11px] font-semibold">Attach verified coordinates</span>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      <NumberField label="Latitude" value={latitude} onChange={setLatitude} />
-                      <NumberField label="Longitude" value={longitude} onChange={setLongitude} />
-                      <NumberField label="Accuracy (m)" value={relocateAccuracy} onChange={setRelocateAccuracy} />
-                    </div>
-                    <button
-                      onClick={relocate}
-                      disabled={relocateBusy}
-                      className="mt-2 flex items-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/70 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-                    >
-                      {relocateBusy && <Loader2 className="h-3 w-3 animate-spin" />}
-                      Save corrected location
-                    </button>
+                <div className="flex items-start gap-2">
+                  {hasCoordinates ? <CheckCircle2 className="mt-0.5 size-4 shrink-0" /> : <Info className="mt-0.5 size-4 shrink-0" />}
+                  <div>
+                    <p className="font-semibold">
+                      {hasCoordinates ? coordinate(lat, lon) : 'No coordinates will be attached'}
+                    </p>
+                    <p className="mt-0.5 opacity-90">
+                      {hasCoordinates
+                        ? acc != null
+                          ? `Accuracy from this source: ±${acc} m.`
+                          : 'No accuracy radius was supplied for these coordinates.'
+                        : 'The server does not infer a location from the photo. You can add coordinates later from this screen.'}
+                    </p>
                   </div>
-                )}
+                </div>
               </div>
 
-              {report.evidence.length > 0 && (
-                <div className="rounded-2xl border border-white/10 bg-[#111C2E] p-5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400 mb-3 flex items-center gap-1.5">
-                    <Layers className="h-3.5 w-3.5" /> Preserved Evidence
-                  </h3>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {report.evidence.map((evidence) => (
-                      <div key={evidence.evidence_id} className="rounded-xl border border-white/10 overflow-hidden bg-slate-900/60">
-                        <img src={evidence.url} alt="Report evidence" className="w-full h-36 object-cover" />
-                        <div className="p-2 font-mono text-[10px] text-slate-400">
-                          <div>{evidence.width} × {evidence.height}px</div>
-                          <div className="truncate">sha256: {evidence.sha256}</div>
+              {gpsMessage && (
+                <div
+                  className={`flex items-start gap-2 rounded-xl border p-3 text-[11.5px] leading-relaxed ${
+                    gpsState === 'acquired'
+                      ? 'border-success/20 bg-success-soft text-success'
+                      : 'border-warning/25 bg-warning-soft text-warning'
+                  }`}
+                >
+                  {gpsState === 'acquired' ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+                  ) : (
+                    <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                  )}
+                  <span>{gpsMessage}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="space-y-4">
+              <div className="flex items-start gap-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line bg-[#fbf9f3] text-muted">
+                  <MapPin className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <SectionLabel>03 · Submit</SectionLabel>
+                  <p className="mt-1 text-[12px] leading-relaxed text-secondary">
+                    The submission is protected by a per-photo idempotency key. Retrying after a network error returns the
+                    original report instead of creating a duplicate.
+                  </p>
+                  <p className="mt-2 truncate font-mono text-[10.5px] text-muted">
+                    key: {idempotencyKey || 'generating…'}
+                  </p>
+                </div>
+              </div>
+
+              <Button className="w-full" size="lg" onClick={submit} loading={isSubmitting} disabled={!file}>
+                {isSubmitting ? 'Storing report…' : 'Submit pothole report'}
+                {!isSubmitting && <ArrowRight />}
+              </Button>
+
+              {isSubmitting && (
+                <Progress value={uploadProgress} label="Upload progress" height="sm" />
+              )}
+
+              {error && (
+                <div className="flex items-start gap-2 rounded-xl border border-critical/20 bg-critical-soft p-3.5 text-[11.5px] leading-relaxed text-critical">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div className="flex items-start gap-2 border-t border-line pt-3 text-[11px] leading-relaxed text-muted">
+                <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Submitting does not verify the defect on site, merge records, or change a canonical status. Those are
+                  separate, reviewable decisions.
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <div className="flex flex-col gap-5 lg:col-span-5">
+          {!report ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <div>
+                    <SectionLabel>Pipeline</SectionLabel>
+                    <CardTitle className="mt-1.5">What happens after you submit</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {[
+                    {
+                      icon: ImageIcon,
+                      title: 'Evidence is preserved',
+                      body: 'The original image is stored with its SHA-256 hash and pixel dimensions, then the detector reads it.',
+                    },
+                    {
+                      icon: Layers,
+                      title: 'Duplicate decision is audited',
+                      body: 'Distance, visual similarity and shape similarity are scored against nearby canonical records. Proximity alone never merges anything.',
+                    },
+                    {
+                      icon: MapPin,
+                      title: 'Location status is reported honestly',
+                      body: 'Verified coordinates are kept. Missing coordinates leave the report pending, never silently filled in.',
+                    },
+                  ].map((step, index) => {
+                    const Icon = step.icon
+                    return (
+                      <div key={step.title} className="flex gap-3">
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-[#fbf9f3] font-mono text-[10px] text-muted">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink">
+                            <Icon className="size-3.5 text-primary" />
+                            {step.title}
+                          </p>
+                          <p className="mt-0.5 text-[11.5px] leading-relaxed text-secondary">{step.body}</p>
                         </div>
                       </div>
-                    ))}
+                    )
+                  })}
+                  <div className="rounded-xl border border-line bg-[#fbf9f3] p-3 text-[11px] leading-relaxed text-secondary">
+                    <span className="font-semibold text-graphite">Policy reminders.</span> MATCH requires a combined score
+                    above the policy threshold and a visual score above the minimum. UNCERTAIN is routed to human review and
+                    is never presented as a confirmed duplicate.
                   </div>
+                </CardContent>
+              </Card>
+
+              <EmptyState
+                icon={ShieldQuestion}
+                title="No report submitted yet"
+                description="After submission this panel shows the report ID, detector output, the duplicate decision with its signals, and the location verification state."
+              />
+            </>
+          ) : (
+            <>
+              <Card className="overflow-hidden">
+                <div className="flex items-start justify-between gap-3 border-b border-line bg-success-soft px-5 py-4">
+                  <div className="flex items-start gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-success/10 text-success">
+                      <CheckCircle2 className="size-5" />
+                    </span>
+                    <div>
+                      <p className="font-display text-[15px] font-semibold text-ink">
+                        {report.idempotent_replay ? 'Original report returned' : 'Report stored'}
+                      </p>
+                      <p className="mt-0.5 text-[11.5px] text-secondary">
+                        {formatDateTime(report.created_at)} · {report.idempotent_replay ? 'idempotent replay' : 'new submission'}
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge status={report.status} />
                 </div>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <SectionLabel>Report ID</SectionLabel>
+                      <p className="mt-1 break-all font-mono text-[13px] text-ink">{report.report_id}</p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={copyReportId}>
+                      <Copy />
+                      Copy
+                    </Button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Canonical pothole</p>
+                      <p className="mt-1 break-all font-mono text-[11px] text-ink">{report.pothole_id || 'Not linked'}</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Detected class</p>
+                      <p className="mt-1 text-[11.5px] font-medium text-ink">
+                        {report.detection.class ? classLabel(report.detection.class) : 'Not detected'}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Confidence</p>
+                      <p className="mt-1 font-mono text-[11.5px] text-ink">
+                        {report.detection.confidence != null ? formatPercent(report.detection.confidence, 1) : '—'}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Severity</p>
+                      <div className="mt-1">
+                        <SeverityBadge level={report.detection.severity} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {report.idempotent_replay && (
+                    <div className="flex items-start gap-2 rounded-lg border border-info/20 bg-info-soft p-2.5 text-[11px] leading-relaxed text-info">
+                      <Info className="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        This submission reused an existing idempotency key, so the original report was returned rather than
+                        creating a second record.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" asChild>
+                      <Link href={`/duplicates?focus=${encodeURIComponent(report.report_id)}`}>
+                        Duplicate centre
+                        <ExternalLink />
+                      </Link>
+                    </Button>
+                    {report.pothole_id && (
+                      <Button variant="secondary" size="sm" asChild>
+                        <Link href={`/map?focus=${encodeURIComponent(report.pothole_id)}`}>
+                          Canonical record
+                          <ExternalLink />
+                        </Link>
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="sm" onClick={resetForm}>
+                      File another report
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card
+                className={
+                  decisionCopy.tone === 'success'
+                    ? 'border-success/25'
+                    : decisionCopy.tone === 'warning'
+                      ? 'border-warning/30'
+                      : decisionCopy.tone === 'info'
+                        ? 'border-info/25'
+                        : undefined
+                }
+              >
+                <CardHeader>
+                  <div>
+                    <SectionLabel>Duplicate decision</SectionLabel>
+                    <CardTitle className="mt-1.5 flex items-center gap-2">
+                      <DecisionBadge decision={decision} />
+                      {report.match.score != null && (
+                        <span className="font-mono text-[11px] font-normal text-muted">
+                          score {report.match.score.toFixed(3)}
+                        </span>
+                      )}
+                    </CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div
+                    className={`rounded-xl border p-3 text-[11.5px] leading-relaxed ${
+                      decisionCopy.tone === 'success'
+                        ? 'border-success/20 bg-success-soft text-success'
+                        : decisionCopy.tone === 'warning'
+                          ? 'border-warning/25 bg-warning-soft text-warning'
+                          : decisionCopy.tone === 'info'
+                            ? 'border-info/20 bg-info-soft text-info'
+                            : 'border-line bg-[#fbf9f3] text-secondary'
+                    }`}
+                  >
+                    <p className="font-semibold">{decisionCopy.title}</p>
+                    <p className="mt-1 opacity-90">{decisionCopy.body}</p>
+                    {report.match.reason && <p className="mt-2 opacity-90">Engine note: {report.match.reason}</p>}
+                  </div>
+
+                  {metrics ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { label: 'Distance', value: metrics.distance_m, suffix: ' m' },
+                          { label: 'Search radius', value: metrics.radius_m, suffix: ' m' },
+                          { label: 'Visual', value: metrics.visual_similarity, percent: true },
+                          { label: 'Shape', value: metrics.shape_similarity, percent: true },
+                        ].map((row) => (
+                          <div key={row.label} className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                            <p className="label-mono text-[9px]">{row.label}</p>
+                            <p className="mt-1 font-mono text-[12px] text-ink">
+                              {row.value == null
+                                ? '—'
+                                : row.percent
+                                  ? formatPercent(row.value, 1)
+                                  : `${row.value}${row.suffix || ''}`}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between text-[11px]">
+                          <span className="text-secondary">Combined score</span>
+                          <span className="font-mono text-ink">{formatPercent(metrics.combined_score, 3)}</span>
+                        </div>
+                        <Progress
+                          value={(metrics.combined_score || 0) * 100}
+                          tone={decision === 'MATCH' ? 'success' : decision === 'UNCERTAIN' ? 'warning' : 'info'}
+                          height="sm"
+                        />
+                        {policy && (
+                          <p className="mt-1.5 font-mono text-[10px] text-muted">
+                            thresholds · match ≥ {formatPercent(policy.match_threshold, 2)} · review ≥{' '}
+                            {formatPercent(policy.review_threshold, 2)} · visual ≥{' '}
+                            {formatPercent(policy.min_visual_similarity, 2)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11.5px] leading-relaxed text-muted">
+                      No signal breakdown was recorded for this report. The decision above is shown exactly as returned, with
+                      no reconstructed scores.
+                    </p>
+                  )}
+
+                  <p className="border-t border-line pt-3 text-[10.5px] leading-relaxed text-muted">
+                    This screen never merges records. A MATCH links the report to an existing canonical record; an UNCERTAIN
+                    report waits for a person in the duplicate centre.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div>
+                    <SectionLabel>Location</SectionLabel>
+                    <CardTitle className="mt-1.5 flex items-center gap-2">
+                      <Navigation className="size-4 text-primary" />
+                      {report.location.status.replace(/_/g, ' ')}
+                    </CardTitle>
+                  </div>
+                  <Badge tone={report.location.status === 'verified' ? 'success' : 'warning'} dot>
+                    {report.location.status === 'verified' ? 'Verified' : 'Pending verification'}
+                  </Badge>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Latitude</p>
+                      <p className="mt-1 font-mono text-[11px] text-ink">{report.location.latitude ?? '—'}</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Longitude</p>
+                      <p className="mt-1 font-mono text-[11px] text-ink">{report.location.longitude ?? '—'}</p>
+                    </div>
+                    <div className="rounded-lg border border-line bg-[#fbf9f3] p-2.5">
+                      <p className="label-mono text-[9px]">Accuracy</p>
+                      <p className="mt-1 font-mono text-[11px] text-ink">
+                        {report.location.accuracy_m != null ? `±${report.location.accuracy_m} m` : '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {report.location.note && (
+                    <p className="text-[11.5px] leading-relaxed text-secondary">{report.location.note}</p>
+                  )}
+
+                  {report.location.status !== 'verified' && !report.pothole_id ? (
+                    <div className="space-y-3 border-t border-line pt-3">
+                      <div>
+                        <p className="text-[12.5px] font-semibold text-ink">Attach verified coordinates</p>
+                        <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+                          Enter coordinates you have confirmed. Saving them updates this report only.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <Field label="Latitude" htmlFor="relocate-latitude">
+                          <Input
+                            id="relocate-latitude"
+                            value={latitude}
+                            onChange={(event) => setLatitude(event.target.value)}
+                            inputMode="decimal"
+                            placeholder="—"
+                            className="font-mono"
+                          />
+                        </Field>
+                        <Field label="Longitude" htmlFor="relocate-longitude">
+                          <Input
+                            id="relocate-longitude"
+                            value={longitude}
+                            onChange={(event) => setLongitude(event.target.value)}
+                            inputMode="decimal"
+                            placeholder="—"
+                            className="font-mono"
+                          />
+                        </Field>
+                        <Field label="Accuracy (m)" htmlFor="relocate-accuracy">
+                          <Input
+                            id="relocate-accuracy"
+                            value={relocateAccuracy}
+                            onChange={(event) => setRelocateAccuracy(event.target.value)}
+                            inputMode="decimal"
+                            placeholder="—"
+                            className="font-mono"
+                          />
+                        </Field>
+                      </div>
+                      <Button variant="secondary" size="sm" onClick={relocate} loading={relocateBusy}>
+                        <Navigation />
+                        Save corrected location
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="border-t border-line pt-3 text-[10.5px] leading-relaxed text-muted">
+                      {report.pothole_id
+                        ? 'This report is linked to a canonical record; its coordinates are managed with that record.'
+                        : 'These coordinates are already verified for this report.'}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {report.evidence.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <div>
+                      <SectionLabel>Preserved evidence</SectionLabel>
+                      <CardTitle className="mt-1.5">Original submission</CardTitle>
+                    </div>
+                    <Badge tone="neutral">{report.evidence.length} file{report.evidence.length === 1 ? '' : 's'}</Badge>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {report.evidence.map((evidence) => (
+                        <div key={evidence.evidence_id} className="overflow-hidden rounded-xl border border-line bg-[#fbf9f3]">
+                          <img
+                            src={evidence.url}
+                            alt="Preserved report evidence"
+                            className="h-40 w-full object-cover"
+                          />
+                          <div className="space-y-0.5 border-t border-line p-2.5 font-mono text-[10px] text-muted">
+                            <p>
+                              {evidence.width ?? '—'} × {evidence.height ?? '—'} px
+                            </p>
+                            <p className="truncate" title={evidence.sha256}>
+                              sha256: {evidence.sha256}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
               )}
             </>
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange: (value: string) => void
-}) {
-  return (
-    <div>
-      <label className="text-[10px] font-mono uppercase tracking-wider text-slate-400 block mb-1">{label}</label>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        inputMode="decimal"
-        className="w-full rounded-lg border border-white/10 bg-slate-900 p-2 text-xs text-white font-mono"
-        placeholder="—"
-      />
-    </div>
-  )
-}
-
-function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="rounded-lg bg-slate-900/60 border border-white/5 p-2">
-      <span className="block text-[9px] uppercase tracking-wider text-slate-500">{label}</span>
-      <span className={`text-white ${mono ? 'font-mono text-[11px] break-all' : 'capitalize'}`}>{value}</span>
     </div>
   )
 }

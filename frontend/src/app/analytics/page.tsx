@@ -92,6 +92,11 @@ export default function AnalyticsPage() {
   const [range, setRange] = React.useState<RangeKey>('30')
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const [nowMs, setNowMs] = React.useState<number | null>(null)
+
+  React.useEffect(() => {
+    setNowMs(Date.now())
+  }, [])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -125,11 +130,12 @@ export default function AnalyticsPage() {
 
   const startDate = React.useMemo(() => {
     if (range === 'all') return new Date(0)
-    const date = new Date()
+    if (nowMs === null) return new Date(0)
+    const date = new Date(nowMs)
     date.setHours(0, 0, 0, 0)
     date.setDate(date.getDate() - (Number(range) - 1))
     return date
-  }, [range])
+  }, [range, nowMs])
 
   const filteredInspections = React.useMemo(
     () =>
@@ -159,10 +165,11 @@ export default function AnalyticsPage() {
   )
 
   const trend = React.useMemo(() => {
+    if (nowMs === null) return []
     const days = range === '7' ? 7 : range === '30' ? 30 : 90
     const bucketSize = days > 30 ? 7 : 1
     const bucketCount = Math.ceil(days / bucketSize)
-    const now = new Date()
+    const now = new Date(nowMs)
     now.setHours(23, 59, 59, 999)
 
     return Array.from({ length: bucketCount }).map((_, index) => {
@@ -184,7 +191,7 @@ export default function AnalyticsPage() {
         reports: filteredReports.filter((report) => inBucket(report.created_at)).length,
       }
     })
-  }, [range, filteredInspections, filteredReports])
+  }, [range, nowMs, filteredInspections, filteredReports])
 
   const severityData = React.useMemo(
     () =>
@@ -396,7 +403,7 @@ export default function AnalyticsPage() {
           <CardContent className="pt-4">
             <div className="h-[270px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trend} margin={{ top: 6, right: 10, left: -18, bottom: 0 }}>
+                <AreaChart data={trend} margin={{ top: 6, right: 20, left: -18, bottom: 0 }}>
                   <defs>
                     <linearGradient id="inspectionsFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={CHART.primary} stopOpacity={0.25} />
@@ -424,6 +431,7 @@ export default function AnalyticsPage() {
                     name="Inspections"
                     stroke={CHART.primary}
                     strokeWidth={2}
+                    isAnimationActive={false}
                     fill="url(#inspectionsFill)"
                   />
                   <Area
@@ -432,6 +440,7 @@ export default function AnalyticsPage() {
                     name="Reports"
                     stroke={CHART.info}
                     strokeWidth={2}
+                    isAnimationActive={false}
                     fill="url(#reportsFill)"
                   />
                 </AreaChart>
@@ -467,6 +476,7 @@ export default function AnalyticsPage() {
                         outerRadius={84}
                         paddingAngle={2}
                         strokeWidth={0}
+                        isAnimationActive={false}
                       >
                         {severityData.map((entry) => (
                           <Cell key={entry.level} fill={entry.color} />

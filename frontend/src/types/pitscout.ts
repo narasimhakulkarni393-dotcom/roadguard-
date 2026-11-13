@@ -163,6 +163,13 @@ export interface DetectionMeasurements {
   limitation?: string | null
 }
 
+export interface DetectionCause {
+  cause: string
+  likelihood: string | null
+  supporting_observations: string[]
+  recommended_inspection: string | null
+}
+
 export interface NormalizedDetection {
   detection_id: string
   class_name: string
@@ -174,7 +181,8 @@ export interface NormalizedDetection {
     score: number | null
     factors: unknown[]
   }
-  probable_causes: unknown[]
+  possible_causes?: DetectionCause[]
+  probable_causes?: DetectionCause[]
   recommended_actions: unknown[]
   [key: string]: unknown
 }
@@ -301,5 +309,20 @@ export interface DatasetStatus {
     processed_files: number
     classes: string[]
   }[]
+  summary?: {
+    total_raw_files: number
+    total_processed_files: number
+    storage_path: string
+  }
   [key: string]: unknown
+}
+
+export interface DatasetValidationResult {
+  dataset_name?: string
+  valid?: boolean
+  checked_images?: number
+  corrupted_images?: number
+  corruption_details?: string[]
+  message?: string
+  detail?: string
 }
