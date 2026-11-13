@@ -1,476 +1,772 @@
 'use client'
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
+import Link from 'next/link'
 import { useDropzone } from 'react-dropzone'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import {
   UploadCloud,
-  FileImage,
   CheckCircle2,
   AlertCircle,
   Loader2,
   ScanEye,
   ShieldCheck,
   Flame,
-  ArrowRight,
   RefreshCw,
-  Sliders,
+  Route,
+  FileText,
+  CircleDot,
+  Activity,
+  Layers,
+  ImageOff,
 } from 'lucide-react'
 import { DamageViewer } from '@/components/DamageViewer'
 import { DamageDetailPanel } from '@/components/DamageDetailPanel'
+import {
+  PageHeader,
+  StatCard,
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+  Button,
+  Badge,
+  SeverityBadge,
+  EmptyState,
+  Progress,
+} from '@/components/ui'
+import { clientApi } from '@/lib/client-api'
+import { classLabel, formatBytes, formatNumber, shortId } from '@/lib/format'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
+const PIPELINE_STEPS = [
+  { id: 'image_validation', label: 'Image validation', detail: 'Format, decode and EXIF orientation' },
+  { id: 'authenticity_check', label: 'Authenticity screen', detail: 'Heuristic provenance screening' },
+  { id: 'detection', label: 'Defect detection', detail: 'Server-side road-damage inference' },
+  { id: 'measurement_severity_causes', label: 'Measurement and severity', detail: 'Geometry, scoring and cause hypotheses' },
+  { id: 'annotation', label: 'Annotation overlay', detail: 'Evidence boxes when defects are found' },
+  { id: 'report_assembly', label: 'Report assembly', detail: 'Assemble the inspection payload' },
+] as const
 
-interface PipelineStep {
-  id: string
-  name: string
-  status: 'idle' | 'running' | 'completed' | 'failed'
-  message?: string
-}
+const STAGE_INDEX: Record<string, number> = Object.fromEntries(
+  PIPELINE_STEPS.map((step, index) => [step.id, index])
+)
+
+type StepState = 'idle' | 'running' | 'completed' | 'failed'
 
 export default function InspectPage() {
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [isUploading, setIsUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploading, setUploading] = useState(false)
   const [analysisId, setAnalysisId] = useState<string | null>(null)
   const [analysisResult, setAnalysisResult] = useState<any | null>(null)
   const [selectedDetectionId, setSelectedDetectionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [stage, setStage] = useState<string | null>(null)
+  const [pollAttempts, setPollAttempts] = useState(0)
 
-  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([
-    { id: 'validation', name: 'Stage 1: Image Validation', status: 'idle' },
-    { id: 'authenticity', name: 'Stage 2: Authenticity & Provenance', status: 'idle' },
-    { id: 'detection', name: 'Stage 3: YOLO Road Defect Detection', status: 'idle' },
-    { id: 'measurement', name: 'Stage 4 & 5: Geometric Measurement', status: 'idle' },
-    { id: 'severity', name: 'Stage 6: Explainable Severity Scoring', status: 'idle' },
-    { id: 'causes', name: 'Stage 7: Engineering Cause Hypotheses', status: 'idle' },
-    { id: 'report', name: 'Stage 8: Inspection Report Assembly', status: 'idle' },
-  ])
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const previewRef = useRef<string | null>(null)
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (acceptedFiles.length > 0) {
-      const selected = acceptedFiles[0]
-      setFile(selected)
-      setPreviewUrl(URL.createObjectURL(selected))
-      setAnalysisResult(null)
-      setError(null)
-      setSelectedDetectionId(null)
-      setPipelineSteps((prev) => prev.map((s) => ({ ...s, status: 'idle' })))
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
     }
   }, [])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+    }
+  }, [])
+
+  const resetAll = useCallback(() => {
+    stopPolling()
+    if (previewRef.current) {
+      URL.revokeObjectURL(previewRef.current)
+      previewRef.current = null
+    }
+    setFile(null)
+    setPreviewUrl(null)
+    setUploadProgress(0)
+    setUploading(false)
+    setAnalysisId(null)
+    setAnalysisResult(null)
+    setSelectedDetectionId(null)
+    setError(null)
+    setStage(null)
+    setPollAttempts(0)
+  }, [stopPolling])
+
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      if (acceptedFiles.length === 0) return
+      const selected = acceptedFiles[0]
+      stopPolling()
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+      const url = URL.createObjectURL(selected)
+      previewRef.current = url
+      setFile(selected)
+      setPreviewUrl(url)
+      setAnalysisResult(null)
+      setAnalysisId(null)
+      setSelectedDetectionId(null)
+      setError(null)
+      setStage(null)
+      setUploadProgress(0)
+      setPollAttempts(0)
+      setUploading(false)
+    },
+    [stopPolling]
+  )
+
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDrop,
+    onDropRejected: (rejections) => {
+      const reason = rejections[0]?.errors?.[0]?.code
+      setError(
+        reason === 'file-too-large'
+          ? 'That image is larger than 50 MB. Resize it and try again.'
+          : reason === 'file-invalid-type'
+            ? 'Unsupported file type. Use JPEG, PNG, WEBP or BMP.'
+            : 'The image could not be accepted. Check the file and try again.'
+      )
+    },
     accept: { 'image/*': ['.jpg', '.jpeg', '.png', '.webp', '.bmp'] },
     maxSize: 50 * 1024 * 1024,
     multiple: false,
   })
 
-  const startAnalysis = async () => {
-    if (!file) return
-    setIsUploading(true)
-    setError(null)
+  const pollAnalysis = useCallback(
+    (id: string) => {
+      stopPolling()
+      let attempts = 0
+      let inFlight = false
 
-    // Set first steps running
-    setPipelineSteps((prev) =>
-      prev.map((s, idx) => (idx === 0 ? { ...s, status: 'running' } : { ...s, status: 'idle' }))
-    )
-
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const res = await fetch(`${API_BASE}/api/v1/analysis/image`, {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}))
-        throw new Error(errJson.detail || `Upload failed with HTTP ${res.status}`)
+      const tick = async () => {
+        if (inFlight) return
+        inFlight = true
+        attempts += 1
+        setPollAttempts(attempts)
+        try {
+          const res = await fetch(`/api/v1/analysis/${id}/result`, { cache: 'no-store' })
+          if (res.status === 200) {
+            const result = await res.json()
+            stopPolling()
+            setAnalysisResult(result)
+            setStage('done')
+            setUploading(false)
+            setSelectedDetectionId(result?.detections?.[0]?.detection_id ?? null)
+            return
+          }
+          if (res.status === 202) {
+            const body = await res.json().catch(() => null)
+            if (body?.pipeline_stage) setStage(body.pipeline_stage)
+            if (attempts >= 40) {
+              stopPolling()
+              setUploading(false)
+              setStage('timeout')
+              setError(
+                'The analysis did not finish within 48 seconds. The job may still be running on the server — check the inspections log before resubmitting.'
+              )
+            }
+            return
+          }
+          const body = await res.json().catch(() => null)
+          stopPolling()
+          setUploading(false)
+          setStage('failed')
+          setError(
+            body?.detail ||
+              body?.error ||
+              `Analysis failed with HTTP ${res.status}. The inspection was preserved on the server.`
+          )
+        } catch (err: any) {
+          stopPolling()
+          setUploading(false)
+          setStage('failed')
+          setError(err?.message || 'Could not reach the analysis status endpoint.')
+        } finally {
+          inFlight = false
+        }
       }
 
-      const uploadData = await res.json()
-      setAnalysisId(uploadData.analysis_id)
+      pollRef.current = setInterval(() => {
+        void tick()
+      }, 1200)
+      void tick()
+    },
+    [stopPolling]
+  )
 
-      // Mark validation done and authenticity running
-      setPipelineSteps((prev) =>
-        prev.map((s, idx) => {
-          if (idx === 0) return { ...s, status: 'completed' }
-          if (idx <= 2) return { ...s, status: 'running' }
-          return s
-        })
-      )
+  const startAnalysis = async () => {
+    if (!file || uploading) return
+    stopPolling()
+    setUploading(true)
+    setError(null)
+    setAnalysisResult(null)
+    setSelectedDetectionId(null)
+    setUploadProgress(0)
+    setPollAttempts(0)
+    setStage('uploading')
 
-      // Start polling for result
-      pollAnalysis(uploadData.analysis_id)
+    try {
+      const upload = await clientApi.uploadImage(file, (percent) => setUploadProgress(percent))
+      setAnalysisId(upload.analysis_id)
+      setStage('queued')
+      pollAnalysis(upload.analysis_id)
     } catch (err: any) {
-      setError(err.message || 'An error occurred during submission.')
-      setIsUploading(false)
-      setPipelineSteps((prev) => prev.map((s) => ({ ...s, status: 'failed' })))
+      setUploading(false)
+      setStage(null)
+      setError(err?.detail || err?.message || 'The image could not be uploaded.')
     }
   }
 
-  const pollAnalysis = async (id: string) => {
-    const maxAttempts = 40
-    let attempts = 0
-
-    const interval = setInterval(async () => {
-      attempts++
-      try {
-        const res = await fetch(`${API_BASE}/api/v1/analysis/${id}/result`)
-        if (res.status === 200) {
-          const result = await res.json()
-          clearInterval(interval)
-          setAnalysisResult(result)
-          setIsUploading(false)
-
-          // Mark all steps completed
-          setPipelineSteps((prev) => prev.map((s) => ({ ...s, status: 'completed' })))
-
-          // Auto-select first detection if available
-          if (result.detections && result.detections.length > 0) {
-            setSelectedDetectionId(result.detections[0].detection_id)
-          }
-        } else if (res.status === 202) {
-          // Progress stages
-          setPipelineSteps((prev) =>
-            prev.map((s, idx) => {
-              if (attempts > 1 && idx <= 3) return { ...s, status: 'completed' }
-              if (attempts > 3 && idx <= 5) return { ...s, status: 'completed' }
-              if (attempts > 5) return { ...s, status: 'completed' }
-              return s
-            })
-          )
-        } else if (res.status >= 400) {
-          clearInterval(interval)
-          throw new Error('Analysis processing failed on the backend.')
-        }
-
-        if (attempts >= maxAttempts) {
-          clearInterval(interval)
-          throw new Error('Analysis polling timed out.')
-        }
-      } catch (err: any) {
-        clearInterval(interval)
-        setIsUploading(false)
-        setError(err.message || 'Error fetching analysis status.')
-      }
-    }, 1200)
-  }
-
+  const imageWidth = analysisResult?.image_info?.width || 1280
+  const imageHeight = analysisResult?.image_info?.height || 720
   const rawList = analysisResult?.detections || analysisResult?.damage_analysis?.detections || []
-  const normalizedDetections = rawList.map((d: any, idx: number) => {
-    const x1 = Array.isArray(d.bbox) ? d.bbox[0] : (d.bbox?.x1 ?? 0)
-    const y1 = Array.isArray(d.bbox) ? d.bbox[1] : (d.bbox?.y1 ?? 0)
-    const x2 = Array.isArray(d.bbox) ? d.bbox[2] : (d.bbox?.x2 ?? 0)
-    const y2 = Array.isArray(d.bbox) ? d.bbox[3] : (d.bbox?.y2 ?? 0)
-    const w = Math.max(1, Math.abs(x2 - x1))
-    const h = Math.max(1, Math.abs(y2 - y1))
-    const className = d.class_name || d.class || 'unknown'
-    const sevLevel = typeof d.severity === 'string' ? d.severity.toUpperCase() : (d.severity?.level || 'UNKNOWN')
-    const geometry = d.measurements || d.geometry || {}
 
-    // Never invent severity scores, causes or actions: absent fields stay empty.
+  const normalizedDetections = rawList.map((detection: any, idx: number) => {
+    const rawBbox = detection.bbox
+    const x1 = Array.isArray(rawBbox) ? rawBbox[0] : (rawBbox?.x1 ?? 0)
+    const y1 = Array.isArray(rawBbox) ? rawBbox[1] : (rawBbox?.y1 ?? 0)
+    const x2 = Array.isArray(rawBbox) ? rawBbox[2] : (rawBbox?.x2 ?? 0)
+    const y2 = Array.isArray(rawBbox) ? rawBbox[3] : (rawBbox?.y2 ?? 0)
+    const width = Math.max(1, Math.abs(x2 - x1))
+    const height = Math.max(1, Math.abs(y2 - y1))
+    const className = detection.class_name || detection.class || 'unknown'
+    const severityLevel =
+      typeof detection.severity === 'string'
+        ? detection.severity.toUpperCase()
+        : detection.severity?.level || 'UNKNOWN'
+    const geometry = detection.measurements || detection.geometry || {}
+
+    // Absent scores, causes and actions stay empty instead of being invented.
     return {
-      ...d,
-      detection_id: d.detection_id || `det-${String(idx + 1).padStart(2, '0')}`,
+      ...detection,
+      detection_id: detection.detection_id || `det-${String(idx + 1).padStart(2, '0')}`,
       class_name: className,
       bbox: { x1, y1, x2, y2 },
       measurements: {
-        width_pixels: geometry.width_pixels ?? w,
-        height_pixels: geometry.height_pixels ?? h,
-        area_pixels: geometry.area_pixels ?? (w * h),
-        relative_area: geometry.relative_area ?? ((w * h) / (1280 * 720)),
+        width_pixels: geometry.width_pixels ?? width,
+        height_pixels: geometry.height_pixels ?? height,
+        area_pixels: geometry.area_pixels ?? width * height,
+        relative_area: geometry.relative_area ?? (width * height) / (imageWidth * imageHeight),
         limitation: geometry.limitation || geometry.measurement_note,
       },
       severity: {
-        level: sevLevel,
-        score: typeof d.severity?.score === 'number' ? d.severity.score : null,
-        factors: Array.isArray(d.severity?.factors) ? d.severity.factors : [],
+        level: severityLevel,
+        score: typeof detection.severity?.score === 'number' ? detection.severity.score : null,
+        factors: Array.isArray(detection.severity?.factors) ? detection.severity.factors : [],
       },
-      probable_causes: d.probable_causes || [],
-      recommended_actions: d.recommended_actions || [],
+      possible_causes: detection.possible_causes || detection.probable_causes || [],
+      recommended_actions: detection.recommended_actions || [],
     }
   })
 
   const selectedDetection =
-    normalizedDetections.find((d: any) => d.detection_id === selectedDetectionId) ||
+    normalizedDetections.find((detection: any) => detection.detection_id === selectedDetectionId) ||
     normalizedDetections[0] ||
     null
 
+  const activeIndex = stage ? STAGE_INDEX[stage] ?? -1 : -1
+  const isDone = !!analysisResult || stage === 'done'
+  const pipelineFailed = (stage === 'failed' || stage === 'timeout') && !analysisResult
+
+  const stepState = (index: number): StepState => {
+    if (isDone) return 'completed'
+    if (pipelineFailed && activeIndex >= 0) {
+      if (index < activeIndex) return 'completed'
+      return index === activeIndex ? 'failed' : 'idle'
+    }
+    if (stage === 'uploading' || stage === 'queued') {
+      return index === 0 ? (stage === 'queued' ? 'running' : 'idle') : 'idle'
+    }
+    if (activeIndex < 0) return 'idle'
+    if (index < activeIndex) return 'completed'
+    return index === activeIndex ? 'running' : 'idle'
+  }
+
+  const summary = analysisResult?.summary
+  const authenticity = analysisResult?.authenticity
+  const overallSeverity = summary?.overall_severity || 'UNKNOWN'
+  const modelPending = analysisResult?.model_ready === false
+  const authenticityFlagged =
+    authenticity?.verdict && !['natural'].includes(String(authenticity.verdict).toLowerCase())
+
   return (
-    <div className="flex flex-col gap-8 py-4">
-      {/* Top Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold text-white flex items-center gap-2">
-            <ScanEye className="h-7 w-7 text-cyan-400" />
-            Road Inspection Workspace
-          </h1>
-          <p className="text-xs md:text-sm text-slate-400 mt-1">
-            Submit a road surface image for multi-stage AI damage assessment, measurement, and reporting.
-          </p>
-        </div>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Image intelligence"
+        title="Image detection"
+        description="Submit a road-surface photograph for the eight-stage server pipeline: validation, authenticity screening, defect detection, measurement, severity scoring and report assembly."
+        actions={
+          analysisResult ? (
+            <>
+              <Button variant="secondary" asChild>
+                <Link href={`/reports/${analysisResult.analysis_id || analysisId}`}>
+                  <FileText />
+                  Open report
+                </Link>
+              </Button>
+              <Button variant="soft" onClick={resetAll}>
+                <RefreshCw />
+                New inspection
+              </Button>
+            </>
+          ) : (
+            <Badge tone="info" dot>
+              8-stage pipeline
+            </Badge>
+          )
+        }
+      />
 
-        {analysisResult && (
-          <button
-            onClick={() => {
-              setFile(null)
-              setPreviewUrl(null)
-              setAnalysisResult(null)
-            }}
-            className="flex items-center gap-2 rounded-lg border border-white/10 bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-700"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Inspect Another Image
-          </button>
-        )}
-      </div>
-
-      {/* Main Workspace Area */}
       {!analysisResult ? (
-        <div className="grid gap-8 lg:grid-cols-12">
-          {/* Upload Dropzone */}
-          <div className="lg:col-span-7 flex flex-col gap-4">
-            <div
-              {...getRootProps()}
-              className={`flex min-h-[380px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition-all ${
-                isDragActive
-                  ? 'border-cyan-400 bg-cyan-500/10'
-                  : 'border-white/15 bg-[#111C2E]/60 hover:border-cyan-500/40 hover:bg-[#111C2E]'
-              }`}
-            >
-              <input {...getInputProps()} />
-
-              {previewUrl ? (
-                <div className="flex flex-col items-center gap-4">
-                  <img
-                    src={previewUrl}
-                    alt="Preview"
-                    className="max-h-60 rounded-xl object-contain border border-white/10 shadow-lg"
-                  />
-                  <div className="text-xs text-slate-300">
-                    <span className="font-semibold text-white">{file?.name}</span> (
-                    {Math.round((file?.size || 0) / 1024)} KB)
-                  </div>
-                  <span className="text-[11px] text-cyan-400">Click or drag a new image to replace</span>
+        <div className="grid gap-5 lg:grid-cols-12">
+          {/* Upload column */}
+          <div className="flex flex-col gap-4 lg:col-span-7">
+            <Card>
+              <CardContent className="p-4">
+                <div
+                  {...getRootProps()}
+                  className={`flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center transition-colors ${
+                    isDragActive
+                      ? 'border-primary bg-soft'
+                      : 'border-line-strong bg-[#fbf9f3] hover:border-primary/50 hover:bg-[#fdf7ee]'
+                  }`}
+                >
+                  <input {...getInputProps()} />
+                  {previewUrl ? (
+                    <div className="flex flex-col items-center gap-4">
+                      <img
+                        src={previewUrl}
+                        alt="Selected road image preview"
+                        className="max-h-60 rounded-lg border border-line object-contain shadow-card"
+                      />
+                      <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-secondary">
+                        <Badge tone="neutral">{formatBytes(file?.size)}</Badge>
+                        <span className="max-w-[260px] truncate font-medium text-ink">{file?.name}</span>
+                      </div>
+                      <span className="text-[11px] text-muted">
+                        Click or drop another image to replace this one.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-3">
+                      <span className="flex size-16 items-center justify-center rounded-2xl border border-primary/20 bg-soft text-primary-hover">
+                        <UploadCloud className="size-7" />
+                      </span>
+                      <div>
+                        <h2 className="font-display text-lg font-semibold text-ink">
+                          Drop a road photograph here
+                        </h2>
+                        <p className="mt-1 text-xs text-secondary">
+                          or browse from this device. One image per analysis.
+                        </p>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center justify-center gap-1.5">
+                        {['JPEG', 'PNG', 'WEBP', 'BMP', 'max 50 MB'].map((label) => (
+                          <span
+                            key={label}
+                            className="rounded border border-line bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted"
+                          >
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="mt-2"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          open()
+                        }}
+                      >
+                        Browse files
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="flex flex-col items-center gap-3">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                    <UploadCloud className="h-8 w-8" />
-                  </div>
-                  <h3 className="text-base font-bold text-white">
-                    Drop your road photograph here, or browse
-                  </h3>
-                  <p className="text-xs text-slate-400 max-w-sm">
-                    Supports high-resolution JPEG, PNG, WEBP, BMP up to 50 MB. Dashcam captures and mobile phone photos supported.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {file && !isUploading && (
-              <button
-                onClick={startAnalysis}
-                className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 to-teal-400 py-3.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/25 transition hover:brightness-110"
-              >
-                <ScanEye className="h-4 w-4" />
-                Run 8-Stage Road Analysis
-              </button>
-            )}
+              </CardContent>
+            </Card>
 
             {error && (
-              <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-red-300">
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+              <div className="flex items-start gap-2.5 rounded-xl border border-critical/20 bg-critical-soft p-3.5 text-xs leading-relaxed text-critical">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
+
+            {uploading && (
+              <div className="rounded-xl border border-line bg-card p-4 shadow-card">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="flex items-center gap-2 font-medium text-graphite">
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                    {stage === 'queued' ? 'Analysis running on the server' : 'Uploading image'}
+                  </span>
+                  <span className="font-mono text-[11px] text-muted tabular">
+                    {stage === 'queued' ? `poll ${pollAttempts}` : `${Math.round(uploadProgress)}%`}
+                  </span>
+                </div>
+                <div className="mt-2.5">
+                  <Progress
+                    value={stage === 'queued' ? Math.min(95, 20 + pollAttempts * 2) : uploadProgress}
+                    tone={stage === 'queued' ? 'info' : 'primary'}
+                  />
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  {stage === 'queued'
+                    ? 'The browser polls the authenticated API every 1.2 seconds. Status comes from the server job, not a simulated timer.'
+                    : 'The image is sent through the same-origin API proxy; the API key stays on the server.'}
+                </p>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={startAnalysis} disabled={!file || uploading} loading={uploading} size="lg">
+                <ScanEye />
+                {uploading ? 'Analysis in progress' : 'Run road analysis'}
+              </Button>
+              {file && !uploading && (
+                <Button variant="ghost" size="lg" onClick={resetAll}>
+                  Clear
+                </Button>
+              )}
+              <span className="ml-auto text-[11px] text-muted">
+                Results are also stored in the inspection log.
+              </span>
+            </div>
           </div>
 
-          {/* Pipeline Live Progress */}
-          <div className="lg:col-span-5 flex flex-col gap-4">
-            <div className="rounded-2xl border border-white/10 bg-[#111C2E] p-6 shadow-xl">
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider text-cyan-400 mb-4">
-                Inspection Pipeline Execution
-              </h3>
-
-              <div className="flex flex-col gap-3">
-                {pipelineSteps.map((step) => {
-                  return (
-                    <div
-                      key={step.id}
-                      className={`flex items-center justify-between rounded-xl border p-3 text-xs transition-all ${
-                        step.status === 'completed'
-                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                          : step.status === 'running'
-                          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 animate-pulse'
-                          : step.status === 'failed'
-                          ? 'border-red-500/30 bg-red-500/10 text-red-300'
-                          : 'border-white/5 bg-slate-900/40 text-slate-500'
-                      }`}
-                    >
-                      <span className="font-medium">{step.name}</span>
-                      <div>
-                        {step.status === 'completed' && <CheckCircle2 className="h-4 w-4 text-emerald-400" />}
-                        {step.status === 'running' && <Loader2 className="h-4 w-4 text-cyan-400 animate-spin" />}
-                        {step.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-400" />}
-                        {step.status === 'idle' && <span className="text-[10px] uppercase font-mono">Standby</span>}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {isUploading && (
-                <div className="mt-4 flex items-center gap-2 text-xs text-slate-400">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />
-                  Processing pipeline on server (PyTorch / YOLO inference)...
+          {/* Pipeline column */}
+          <div className="flex flex-col gap-4 lg:col-span-5">
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Pipeline execution</CardTitle>
+                  <p className="mt-1 text-[11px] text-muted">
+                    Stage names are reported by the backend job.
+                  </p>
                 </div>
-              )}
-            </div>
+                <Badge tone={uploading ? 'primary' : pipelineFailed ? 'critical' : 'neutral'} dot>
+                  {stage === 'uploading'
+                    ? 'Uploading'
+                    : stage === 'queued'
+                      ? 'Queued'
+                      : pipelineFailed
+                        ? 'Failed'
+                        : isDone
+                          ? 'Complete'
+                          : 'Standby'}
+                </Badge>
+              </CardHeader>
+              <CardContent className="pt-4">
+                <ol className="flex flex-col gap-1.5">
+                  {PIPELINE_STEPS.map((step, index) => {
+                    const state = stepState(index)
+                    return (
+                      <li
+                        key={step.id}
+                        className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 transition-colors ${
+                          state === 'completed'
+                            ? 'border-success/15 bg-success-soft/60'
+                            : state === 'running'
+                              ? 'border-primary/25 bg-soft'
+                              : state === 'failed'
+                                ? 'border-critical/20 bg-critical-soft'
+                                : 'border-transparent bg-[#fbf9f3]'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <p
+                            className={`text-xs font-medium ${
+                              state === 'idle' ? 'text-muted' : 'text-ink'
+                            }`}
+                          >
+                            {step.label}
+                          </p>
+                          <p className="mt-0.5 text-[10.5px] leading-relaxed text-muted">{step.detail}</p>
+                        </div>
+                        <span className="mt-0.5 shrink-0">
+                          {state === 'completed' && <CheckCircle2 className="size-4 text-success" />}
+                          {state === 'running' && <Loader2 className="size-4 animate-spin text-primary" />}
+                          {state === 'failed' && <AlertCircle className="size-4 text-critical" />}
+                          {state === 'idle' && <CircleDot className="size-4 text-[#cfc9bb]" />}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ol>
+                <p className="mt-3 border-t border-line pt-3 text-[10.5px] leading-relaxed text-muted">
+                  A completed run confirms that the pipeline returned a result. It does not guarantee that
+                  a detection model checkpoint is loaded.
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>What the result contains</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-2.5 pt-3 text-xs text-secondary">
+                {[
+                  { icon: ShieldCheck, text: 'Image validation and authenticity screening with limitations' },
+                  { icon: ScanEye, text: 'Bounding boxes, class names and model confidence' },
+                  { icon: Activity, text: 'Pixel geometry and explainable severity factors' },
+                  { icon: Layers, text: 'Cause hypotheses and recommended inspection actions' },
+                ].map(({ icon: Icon, text }) => (
+                  <div key={text} className="flex items-start gap-2.5 rounded-lg border border-line bg-[#fbf9f3] px-3 py-2">
+                    <Icon className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                    <span className="leading-relaxed">{text}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           </div>
         </div>
       ) : (
-        /* Results View */
-        <div className="flex flex-col gap-6">
-          {/* Summary Strip */}
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-            <div className="rounded-xl border border-white/10 bg-[#111C2E] p-3.5">
-              <span className="text-[10px] text-slate-400 uppercase font-mono">Overall Severity</span>
-              <div className="flex items-center gap-2 mt-1">
-                <span
-                  className={`text-lg font-extrabold ${
-                    analysisResult.summary?.overall_severity === 'CRITICAL'
-                      ? 'text-red-400'
-                      : analysisResult.summary?.overall_severity === 'HIGH'
-                      ? 'text-orange-400'
-                      : analysisResult.summary?.overall_severity === 'MODERATE'
-                      ? 'text-yellow-400'
-                      : 'text-emerald-400'
-                  }`}
-                >
-                  {analysisResult.summary?.overall_severity || 'LOW'}
-                </span>
-                <span className="text-xs font-mono text-slate-400">
-                  ({analysisResult.summary?.overall_severity_score || 0}/100)
-                </span>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-[#111C2E] p-3.5">
-              <span className="text-[10px] text-slate-400 uppercase font-mono">Total Defects</span>
-              <div className="text-lg font-extrabold text-white mt-1">
-                {analysisResult.detections?.length || 0} Defect(s)
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-[#111C2E] p-3.5">
-              <span className="text-[10px] text-slate-400 uppercase font-mono">Image Authenticity</span>
-              <div className="flex items-center gap-1.5 mt-1 text-xs font-bold text-cyan-300">
-                <ShieldCheck className="h-4 w-4 text-cyan-400" />
-                <span className="capitalize">{analysisResult.authenticity?.verdict || 'natural'}</span>
-                <span className="text-[10px] font-mono text-slate-400">
-                  ({Math.round((analysisResult.authenticity?.confidence || 0) * 100)}%)
-                </span>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-[#111C2E] p-3.5">
-              <span className="text-[10px] text-slate-400 uppercase font-mono">Road Health Index</span>
-              <div className="text-lg font-extrabold capitalize text-teal-400 mt-1">
-                {analysisResult.summary?.road_condition || 'Good'}
-              </div>
-            </div>
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="flex flex-col gap-5"
+        >
+          {/* Summary */}
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Overall severity"
+              value={overallSeverity}
+              icon={Flame}
+              tone={
+                overallSeverity === 'CRITICAL' || overallSeverity === 'HIGH'
+                  ? 'critical'
+                  : overallSeverity === 'MODERATE'
+                    ? 'warning'
+                    : 'success'
+              }
+              hint={
+                typeof summary?.overall_severity_score === 'number'
+                  ? `${summary.overall_severity_score}/100 composite score`
+                  : 'No composite score returned'
+              }
+            />
+            <StatCard
+              label="Defects detected"
+              value={formatNumber(normalizedDetections.length)}
+              icon={ScanEye}
+              tone={normalizedDetections.length > 0 ? 'primary' : 'neutral'}
+              hint={summary?.total_detections != null ? `${summary.total_detections} reported by the pipeline` : 'Detections in this frame'}
+            />
+            <StatCard
+              label="Authenticity screen"
+              value={authenticity?.verdict ? classLabel(authenticity.verdict) : 'Not reported'}
+              icon={ShieldCheck}
+              tone={authenticityFlagged ? 'warning' : 'info'}
+              hint={
+                typeof authenticity?.confidence === 'number'
+                  ? `${Math.round(authenticity.confidence * 100)}% confidence · ${authenticity.model_used || 'heuristic'}`
+                  : 'Heuristic screening, not proof of origin'
+              }
+            />
+            <StatCard
+              label="Road condition"
+              value={summary?.road_condition ? classLabel(summary.road_condition) : 'Not reported'}
+              icon={Route}
+              tone={
+                summary?.road_condition === 'critical' || summary?.road_condition === 'poor'
+                  ? 'critical'
+                  : summary?.road_condition === 'fair'
+                    ? 'warning'
+                    : 'success'
+              }
+              hint={summary?.immediate_action_required ? 'Immediate action flagged' : 'Based on this frame only'}
+            />
           </div>
 
-          {/* Model Status Notification */}
-          {!analysisResult.model_ready && (
-            <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200">
-              <AlertCircle className="h-5 w-5 shrink-0 text-amber-400" />
+          {modelPending && (
+            <div className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning-soft p-4 text-xs leading-relaxed text-warning">
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <div>
-                <span className="font-bold text-white block">Trained Model Checkpoint Pending</span>
+                <span className="block font-semibold text-ink">Detection checkpoint pending</span>
                 <span>
-                  The YOLO damage detection model checkpoint has not yet been fine-tuned or loaded. The pipeline executed image validation, authenticity heuristic screening, and established the 8-stage contract. To generate live defect detections, visit the{' '}
-                  <a href="/training" className="font-bold underline text-cyan-400">
-                    Model Training
-                  </a>{' '}
-                  page to start a fine-tuning run on RDD2022.
+                  No fine-tuned damage-detection checkpoint is loaded, so the pipeline can return an empty
+                  detection list. Validation, authenticity screening and the eight-stage contract still ran.
+                  An empty result is not evidence that the road is defect-free.{' '}
+                  <Link href="/training" className="font-semibold underline underline-offset-2">
+                    Open model training
+                  </Link>{' '}
+                  to check readiness.
                 </span>
               </div>
             </div>
           )}
 
-          {/* Detailed Two-Column Viewer + Inspector */}
-          <div className="grid gap-6 lg:grid-cols-12">
-            {/* Left: Interactive Image Viewer */}
-            <div className="lg:col-span-8 flex flex-col gap-4">
+          {authenticityFlagged && (
+            <div className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning-soft p-4 text-xs leading-relaxed text-warning">
+              <ShieldCheck className="mt-0.5 size-4 shrink-0" />
+              <div>
+                <span className="block font-semibold text-ink">
+                  Authenticity screen flagged this image as {classLabel(authenticity.verdict)}
+                </span>
+                <span>
+                  This is a {authenticity?.model_used || 'heuristic'} screen with limited evidence. Verify
+                  the submission chain of custody before acting on the result.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {normalizedDetections.length === 0 && (
+            <EmptyState
+              icon={ImageOff}
+              title="No defects were returned for this frame"
+              description={
+                modelPending
+                  ? 'The detection model is not ready. Once a checkpoint is available, re-run this inspection to obtain boxes and measurements.'
+                  : 'The model returned no detections above threshold. A single image can miss defects; schedule a wider inspection before concluding the road is sound.'
+              }
+              action={
+                <Button variant="secondary" size="sm" onClick={resetAll}>
+                  <RefreshCw />
+                  Try another image
+                </Button>
+              }
+            />
+          )}
+
+          {/* Viewer and inspector */}
+          <div className="grid gap-5 lg:grid-cols-12">
+            <div className="flex flex-col gap-4 lg:col-span-8">
               <DamageViewer
-                originalImageUrl={previewUrl || `${API_BASE}/api/v1/analysis/${analysisResult.analysis_id}/original-image`}
+                originalImageUrl={
+                  previewUrl || `/api/v1/analysis/${analysisResult.analysis_id || analysisId}/original-image`
+                }
                 annotatedImageUrl={
                   analysisResult.annotated_image_url
-                    ? `${API_BASE}${analysisResult.annotated_image_url}`
+                    ? analysisResult.annotated_image_url
                     : null
                 }
-                imageWidth={analysisResult.image_info?.width || 1280}
-                imageHeight={analysisResult.image_info?.height || 720}
+                imageWidth={imageWidth}
+                imageHeight={imageHeight}
                 detections={normalizedDetections}
                 selectedDetectionId={selectedDetectionId || (normalizedDetections[0]?.detection_id ?? null)}
                 onSelectDetection={setSelectedDetectionId}
               />
 
-              {/* Detections List */}
               {normalizedDetections.length > 0 && (
-                <div className="rounded-2xl border border-white/10 bg-[#0E1726] p-4 shadow-xl">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-                    Detected Defects ({normalizedDetections.length})
-                  </h4>
-                  <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
-                    {normalizedDetections.map((det: any) => {
-                      const isSel = (selectedDetectionId || normalizedDetections[0]?.detection_id) === det.detection_id
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Detected defects</CardTitle>
+                    <Badge tone="neutral">{normalizedDetections.length}</Badge>
+                  </CardHeader>
+                  <CardContent className="grid gap-2 pt-4 sm:grid-cols-2 xl:grid-cols-3">
+                    {normalizedDetections.map((detection: any) => {
+                      const selected =
+                        (selectedDetectionId || normalizedDetections[0]?.detection_id) ===
+                        detection.detection_id
                       return (
                         <button
-                          key={det.detection_id}
-                          onClick={() => setSelectedDetectionId(det.detection_id)}
-                          className={`flex items-center justify-between rounded-xl border p-2.5 text-left text-xs transition ${
-                            isSel
-                              ? 'border-cyan-400 bg-cyan-500/15 text-white shadow-md ring-1 ring-cyan-400/50'
-                              : 'border-white/5 bg-slate-900/60 text-slate-300 hover:border-white/20'
+                          key={detection.detection_id}
+                          type="button"
+                          onClick={() => setSelectedDetectionId(detection.detection_id)}
+                          className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left transition ${
+                            selected
+                              ? 'border-primary/50 bg-soft shadow-[0_0_0_1px_rgba(240,138,66,0.15)]'
+                              : 'border-line bg-[#fbf9f3] hover:border-line-strong'
                           }`}
                         >
-                          <div>
-                            <span className="font-bold block capitalize">{det.class_name.replace(/_/g, ' ')}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {Math.round(det.confidence * 100)}% conf
+                          <div className="min-w-0">
+                            <span className="block truncate text-xs font-semibold text-ink">
+                              {classLabel(detection.class_name)}
+                            </span>
+                            <span className="mt-0.5 block font-mono text-[10px] text-muted">
+                              {detection.detection_id} · {Math.round(detection.confidence * 100)}% conf
                             </span>
                           </div>
-                          <span
-                            className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
-                              det.severity?.level === 'CRITICAL'
-                                ? 'bg-red-500/20 text-red-400'
-                                : det.severity?.level === 'HIGH'
-                                ? 'bg-orange-500/20 text-orange-400'
-                                : 'bg-emerald-500/20 text-emerald-400'
-                            }`}
-                          >
-                            {det.severity?.level || 'LOW'}
-                          </span>
+                          <SeverityBadge level={detection.severity?.level} />
                         </button>
                       )
                     })}
-                  </div>
-                </div>
+                  </CardContent>
+                </Card>
               )}
             </div>
 
-            {/* Right: Damage Detail Panel */}
-            <div className="lg:col-span-4 flex flex-col gap-4">
+            <div className="lg:col-span-4">
               <DamageDetailPanel detection={selectedDetection} />
             </div>
           </div>
-        </div>
+
+          {/* Capture diagnostics */}
+          {analysisResult.image_info && (
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>Capture diagnostics</CardTitle>
+                  <p className="mt-1 text-[11px] text-muted">
+                    Reported by the image-validation stage. These describe this file, not road extent.
+                  </p>
+                </div>
+                <Badge tone={analysisResult.quality?.is_acceptable === false ? 'warning' : 'neutral'}>
+                  {analysisResult.quality?.score != null
+                    ? `Quality ${Math.round(analysisResult.quality.score)}/100`
+                    : 'File checks'}
+                </Badge>
+              </CardHeader>
+              <CardContent className="grid gap-x-6 gap-y-3 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Diagnostic label="Resolution" value={`${analysisResult.image_info.width} × ${analysisResult.image_info.height} px`} />
+                <Diagnostic label="File size" value={formatBytes(analysisResult.image_info.file_size_bytes)} />
+                <Diagnostic label="Format" value={`${analysisResult.image_info.format} · ${analysisResult.image_info.mode}`} />
+                <Diagnostic
+                  label="Blur score"
+                  value={`${Number(analysisResult.image_info.blur_score).toFixed(1)}${analysisResult.image_info.is_blurry ? ' · blurry' : ''}`}
+                  tone={analysisResult.image_info.is_blurry ? 'warning' : undefined}
+                />
+                <Diagnostic label="Brightness" value={Number(analysisResult.image_info.brightness).toFixed(2)} />
+                <Diagnostic label="Exposure" value={classLabel(analysisResult.image_info.exposure_quality)} />
+                <Diagnostic label="MD5" value={String(analysisResult.image_info.md5_hash || '').slice(0, 12)} mono />
+                <Diagnostic label="Analysis" value={shortId(analysisResult.analysis_id || analysisId)} mono />
+              </CardContent>
+              {Array.isArray(analysisResult.quality?.issues) && analysisResult.quality.issues.length > 0 && (
+                <div className="border-t border-line px-5 py-3 text-[11px] text-warning">
+                  Quality flags: {analysisResult.quality.issues.join(', ')}
+                </div>
+              )}
+            </Card>
+          )}
+        </motion.div>
       )}
+    </div>
+  )
+}
+
+function Diagnostic({
+  label,
+  value,
+  tone,
+  mono,
+}: {
+  label: string
+  value: string
+  tone?: 'warning'
+  mono?: boolean
+}) {
+  return (
+    <div>
+      <p className="label-mono">{label}</p>
+      <p
+        className={`mt-0.5 truncate text-[12.5px] font-medium ${
+          tone === 'warning' ? 'text-warning' : 'text-ink'
+        } ${mono ? 'font-mono' : ''}`}
+        title={value}
+      >
+        {value || '—'}
+      </p>
     </div>
   )
 }
