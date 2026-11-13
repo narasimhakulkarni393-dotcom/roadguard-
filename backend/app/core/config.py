@@ -61,8 +61,13 @@ class Settings:
     # Authentication — no default. Empty means the API is misconfigured.
     API_KEY: str = os.getenv("ROADGUARD_API_KEY", "").strip()
 
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/roadguard.db")
+    # Database — SQLite by default; set DATABASE_URL for PostgreSQL (e.g. Supabase).
+    _raw_database_url: str = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/roadguard.db").strip()
+    DATABASE_URL: str = (
+        "postgresql://" + _raw_database_url[len("postgres://"):]
+        if _raw_database_url.startswith("postgres://")
+        else _raw_database_url
+    )
 
     # Storage
     STORAGE_DIR: Path = BASE_DIR / "storage"

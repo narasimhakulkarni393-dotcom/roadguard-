@@ -1,0 +1,26 @@
+# Render Blueprint — deploys the FastAPI backend as a Docker web service.
+# Create a Blueprint from this repository in the Render dashboard, then set the
+# two secret values when prompted (they are never committed).
+#
+# RAM: the YOLO detector needs roughly 1-1.5 GB at inference time. Render's free
+# and starter instances have 512 MB and can be killed by the OOM guard; use a
+# 2 GB instance for reliable detection.
+services:
+  - type: web
+    name: pitscout-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      - key: ROADGUARD_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DETECTION_PROVIDER
+        value: yolo
+      - key: DETECTION_CONFIDENCE_THRESHOLD
+        value: "0.15"
+      - key: ROAD_CONFIDENCE_THRESHOLD
+        value: "0.5"

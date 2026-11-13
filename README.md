@@ -137,10 +137,43 @@ The Next.js frontend is deployed on Vercel:
   the server-side route handlers; neither is exposed to the browser.
 
 The FastAPI backend is **not** deployed on Vercel. It needs PyTorch/Ultralytics/OpenCV, a
-writable SQLite database, on-disk evidence storage and in-process video jobs — none of which fit
-the Vercel Functions runtime. Host it on a persistent container service and point `BACKEND_URL`
+writable database, on-disk evidence storage and in-process video jobs — none of which fit the
+Vercel Functions runtime. Host it on a persistent container service and point `BACKEND_URL`
 at it. Until a reachable backend is configured, the deployed UI renders its explicit
 "API unreachable" state rather than fabricated data.
+
+### Backend container (Render / Railway / any Docker host)
+
+The repository root contains a `Dockerfile` that builds the API from the committed code and
+`models/detection/best.pt`, plus a `render.yaml` Blueprint.
+
+1. Create a Render Blueprint from this repository (or a Railway service from the Dockerfile).
+   The image installs CPU-only torch, so the detector runs without a GPU.
+2. Set these environment variables on the service:
+
+   | Variable | Value |
+   |---|---|
+   | `ROADGUARD_API_KEY` | a long random secret (same value Vercel uses) |
+   | `DATABASE_URL` | optional PostgreSQL URL, e.g. Supabase; SQLite is used when unset |
+   | `DETECTION_PROVIDER` | `yolo` (default) |
+
+3. Use an instance with at least **1.5 GB RAM**; 512 MB instances can OOM while loading the
+   detector. Cold starts on a sleeping free instance take tens of seconds.
+4. In Supabase, copy the Postgres connection string (Database → Connect). `postgres://` URLs are
+   normalised to `postgresql://`; append `?sslmode=require` if it is not already present. Tables
+   are created on start-up. If you use the Supabase transaction pooler (port 6543), expect
+   prepared-statement limitations; the direct connection (port 5432) is the safer default.
+5. Evidence images are written to container disk. On hosts without a persistent disk they are
+   lost on redeploy; mount a volume (or use object storage) if reports must keep their images.
+
+Local container run:
+
+```bash
+ROADGUARD_API_KEY=<secret> docker compose up --build
+```
+
+Then set Vercel's `BACKEND_URL` to the service URL (`https://<service>.onrender.com`) and
+`ROADGUARD_API_KEY` to the same secret, and redeploy the frontend.
 
 ## Honest limitations
 
