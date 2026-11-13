@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 export async function POST(req: Request) {
-  const backendUrl = process.env.BACKEND_URL
+  const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
   if (backendUrl) {
     try {
       const formData = await req.formData()
@@ -9,21 +9,17 @@ export async function POST(req: Request) {
         method: 'POST',
         body: formData,
       })
-      if (res.ok) return NextResponse.json(await res.json())
+      if (res.ok) return NextResponse.json(await res.json(), { status: res.status })
+      const errBody = await res.json().catch(() => ({}))
+      return NextResponse.json(errBody, { status: res.status })
     } catch {}
   }
 
-  // Cloud serverless handler
-  const analysisId = `analysis-${Date.now()}`
   return NextResponse.json(
     {
-      analysis_id: analysisId,
-      inspection_id: `insp-${Date.now()}`,
-      status: 'pending',
-      status_url: `/api/v1/analysis/${analysisId}`,
-      result_url: `/api/v1/analysis/${analysisId}/result`,
-      message: 'Image received. Analysis started in background.',
+      detail:
+        'RoadGuard AI Python backend is unreachable. Start the backend service at http://localhost:8000 or set BACKEND_URL.',
     },
-    { status: 202 }
+    { status: 503 }
   )
 }

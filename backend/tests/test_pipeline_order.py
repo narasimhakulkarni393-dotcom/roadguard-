@@ -5,9 +5,10 @@ from PIL import Image
 from fastapi.testclient import TestClient
 from app.main import app
 from app.services.inspection_pipeline import inspection_pipeline
+from app.core.config import settings
 
 client = TestClient(app)
-VALID_KEY = "roadguard-production-api-key-2026"
+VALID_KEY = settings.API_KEY
 AUTH_HEADERS = {"Authorization": f"Bearer {VALID_KEY}"}
 
 
@@ -31,17 +32,16 @@ def test_stage2_rejects_ai_generated_image(monkeypatch):
     """AI-generated images must stop execution immediately at Stage 2."""
     from app.services.authenticity_service import AuthenticityAnalysisResult
 
-    def mock_ai_auth(img):
-        return AuthenticityAnalysisResult(
-            verdict="likely_ai_generated",
-            confidence=0.95,
-            model_used="mock_test",
-            warning="Probabilistic detection",
-            factors={"suspicion_score": 0.85},
-            limitations=[],
-        )
+    def mock_ai_auth(img, **kwargs):
+        return {
+            "label": "likely_ai_generated",
+            "verdict": "likely_ai_generated",
+            "confidence": 0.95,
+            "model_version": "mock_test",
+            "warning": "Probabilistic detection",
+        }
 
-    monkeypatch.setattr("app.services.inspection_pipeline.analyse_authenticity", mock_ai_auth)
+    monkeypatch.setattr(inspection_pipeline.registry.authenticity_classifier, "predict", mock_ai_auth)
 
     # Road-like neutral gray image
     img = Image.new("RGB", (640, 480), color=(110, 110, 110))

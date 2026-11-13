@@ -21,6 +21,7 @@ from app.api.routes import (
     models,
     inspect,
     feedback,
+    admin,
 )
 
 logger = logging.getLogger("roadguard.main")
@@ -81,6 +82,7 @@ app.include_router(training.router)
 app.include_router(reports.router)
 app.include_router(inspections.router)
 app.include_router(models.router)
+app.include_router(admin.router)
 
 # Mount storage for direct static access if needed
 app.mount("/static/annotated", StaticFiles(directory=str(settings.ANNOTATED_DIR)), name="annotated")
@@ -95,6 +97,17 @@ async def health_root():
         "version": settings.APP_VERSION,
         "mode": "production_pipeline",
         "detection_model_ready": settings.DETECTION_MODEL_PATH.exists(),
+    }
+
+
+@app.get("/ready")
+async def readiness_probe():
+    from app.ml.registry import registry
+    return {
+        "status": "ready" if registry.is_all_ready() else "degraded",
+        "models_ready": registry.is_all_ready(),
+        "detection_weights_present": settings.DETECTION_MODEL_PATH.exists(),
+        "components": registry.health(),
     }
 
 

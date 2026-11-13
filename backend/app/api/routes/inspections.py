@@ -1,16 +1,16 @@
-"""Inspections listing route."""
+"""Inspections management routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
-from app.models.database import Inspection
+from app.models.database import Inspection, Analysis
 
-router = APIRouter(prefix="/api/v1/inspections", tags=["inspections"])
+router = APIRouter(tags=["inspections"])
 
 
-@router.get("")
+@router.get("/api/v1/inspections")
 async def list_inspections(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -42,7 +42,8 @@ async def list_inspections(
     }
 
 
-@router.get("/{inspection_id}")
+@router.get("/api/v1/inspections/{inspection_id}")
+@router.get("/api/v1/inspection/{inspection_id}")
 async def get_inspection(inspection_id: str, db: Session = Depends(get_db)):
     item = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not item:
@@ -54,5 +55,16 @@ async def get_inspection(inspection_id: str, db: Session = Depends(get_db)):
         "file_size": item.file_size,
         "notes": item.notes,
         "created_at": item.created_at.isoformat() if item.created_at else None,
-        "analyses": [{"id": a.id, "status": a.status} for a in item.analyses],
+        "analyses": [{"id": a.id, "status": a.status, "pipeline_stage": a.pipeline_stage} for a in item.analyses],
     }
+
+
+@router.delete("/api/v1/inspections/{inspection_id}", status_code=204)
+@router.delete("/api/v1/inspection/{inspection_id}", status_code=204)
+async def delete_inspection(inspection_id: str, db: Session = Depends(get_db)):
+    item = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inspection not found.")
+    db.delete(item)
+    db.commit()
+    return None

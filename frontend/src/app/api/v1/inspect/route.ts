@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   }
 
   // Forward to remote backend if BACKEND_URL configured
-  const backendUrl = process.env.BACKEND_URL
+  const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
   if (backendUrl) {
     try {
       const formData = await req.formData()
@@ -33,57 +33,21 @@ export async function POST(req: Request) {
         body: formData,
       })
       if (res.ok) return NextResponse.json(await res.json())
+      const errBody = await res.json().catch(() => ({}))
+      return NextResponse.json(errBody, { status: res.status })
     } catch {}
   }
 
-  // Serverless inspection response
-  const inspectionId = `insp-${Date.now()}`
-  return NextResponse.json({
-    success: true,
-    inspection_id: inspectionId,
-    pipeline_status: 'completed',
-    image_validation: {
-      valid: true,
-      width: 1280,
-      height: 720,
-      format: 'JPEG',
-      is_blurry: false,
+  // Return honest model-unavailable response without fabricating detections
+  return NextResponse.json(
+    {
+      success: false,
+      pipeline_status: 'needs_model',
+      stage: 'damage_detection',
+      message:
+        'RoadGuard AI Python backend is unreachable. Start the backend service to run genuine YOLOv8 computer vision model inference.',
+      detections: [],
     },
-    road_classification: {
-      label: 'road',
-      confidence: 0.96,
-    },
-    authenticity: {
-      label: 'likely_real',
-      confidence: 0.94,
-      warning: 'Authenticity classification is probabilistic. Never treat model output as absolute proof.',
-    },
-    damage_analysis: {
-      total_detections: 2,
-      detections: [
-        {
-          class: 'pothole',
-          confidence: 0.94,
-          bbox: [280, 340, 490, 510],
-          severity: 'high',
-          probable_causes: [
-            { cause: 'water infiltration and subgrade softening', confidence: 0.82 },
-            { cause: 'repeated vehicle axle loading and fatigue', confidence: 0.74 },
-          ],
-          cause_is_verified: false,
-        },
-        {
-          class: 'manhole_cover',
-          confidence: 0.88,
-          bbox: [620, 180, 740, 420],
-          severity: 'medium',
-          probable_causes: [
-            { cause: 'surrounding pavement differential settlement', confidence: 0.76 },
-            { cause: 'repeated traffic impact around casting frame', confidence: 0.68 },
-          ],
-          cause_is_verified: false,
-        },
-      ],
-    },
-  })
+    { status: 503 }
+  )
 }

@@ -2,9 +2,10 @@
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
+from app.core.config import settings
 
 client = TestClient(app)
-VALID_KEY = "roadguard-production-api-key-2026"
+VALID_KEY = settings.API_KEY
 
 
 def test_public_health_endpoints():

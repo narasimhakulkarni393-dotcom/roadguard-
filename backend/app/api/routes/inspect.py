@@ -48,11 +48,15 @@ async def inspect_road_image(
             detail="Uploaded file payload is empty",
         )
 
-    # 2. Run pipeline
-    result = inspection_pipeline.process_image(file_bytes, file.filename or "upload.jpg")
+    # 2. Run pipeline with request isolation
+    inspection_id = str(uuid.uuid4())
+    result = inspection_pipeline.process_image(
+        file_bytes,
+        file.filename or "upload.jpg",
+        inspection_id=inspection_id,
+    )
 
     # 3. Save inspection record to database
-    inspection_id = str(uuid.uuid4())
     db = SessionLocal()
     try:
         insp = Inspection(
@@ -126,6 +130,7 @@ async def get_inspection_result(
         an = db.query(Analysis).filter(Analysis.inspection_id == inspection_id).first()
         result_data = json.loads(an.result_json) if an and an.result_json else {}
         return {
+            "id": insp.id,
             "inspection_id": insp.id,
             "filename": insp.original_filename,
             "status": insp.status,

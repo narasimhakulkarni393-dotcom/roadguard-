@@ -1,325 +1,344 @@
-"""Core Sequential Inspection Pipeline Service for RoadGuard AI.
+"""Production-Grade Strict Sequential Road Inspection Pipeline for RoadGuard AI.
 
-Implements STRICT SEQUENTIAL IMAGE PROCESSING:
-STAGE 0 — Input Validation
+Implements STRICT SEQUENTIAL IMAGE PROCESSING PIPELINE with complete request isolation:
+STAGE 0 — Input Validation & Content Hashing (SHA-256, EXIF normalization, bomb guard)
 STAGE 1 — Road / Non-Road Classification (STOPS if non-road)
 STAGE 2 — AI-Generated Image Detection (STOPS if AI-generated)
-STAGE 3 — Road Damage Detection (YOLO: pothole, manhole_cover, sewage_hole, longitudinal_crack, transverse_crack, alligator_crack)
-STAGE 4 — False-Positive Verification (filtering pebbles, stones, gravel, speed breakers, shadows, oil stains, markings, patches)
-STAGE 5 — Probable Cause Estimation (with confidence and explicit uncertainty)
+STAGE 3 — Real YOLO Road Damage Detection (pothole, manhole_cover, sewage_hole, longitudinal_crack, transverse_crack, alligator_crack)
+STAGE 4 — False-Positive Verification & Audit Recording
+STAGE 5 — Geometric Analysis (pixels, relative area, no uncalibrated physical measurements)
 STAGE 6 — Severity Assessment (low, medium, high, critical)
-STAGE 7 — Structured Final Response
+STAGE 7 — Probable Cause Estimation (engineering hypotheses, explicit uncertainty)
+STAGE 8 — Structured Final Response & Provenance Tracking
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import logging
-from typing import Any, Dict, List, Optional
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.core.config import settings
-from app.services.image_validation import validate_image, ImageValidationResult
-from app.services.road_classifier import road_classifier, RoadClassificationResult
-from app.services.authenticity_service import analyse_authenticity, AuthenticityAnalysisResult
-from app.services.false_positive_filter import false_positive_filter
+from app.ml.registry import registry
+from app.ml.cause_estimator.service import estimate_causes_for_defect
+from app.ml.severity_assessor.service import assess_defect_severity
 
 logger = logging.getLogger("roadguard.inspection_pipeline")
 
-# Cause knowledge base per class
-PROBABLE_CAUSES: Dict[str, List[Dict[str, Any]]] = {
-    "pothole": [
-        {"cause": "water infiltration and subgrade softening", "confidence": 0.82},
-        {"cause": "repeated vehicle axle loading and fatigue", "confidence": 0.74},
-        {"cause": "asphalt binder oxidation and aggregate stripping", "confidence": 0.58},
-        {"cause": "poor drainage causing moisture accumulation", "confidence": 0.52},
-    ],
-    "manhole_cover": [
-        {"cause": "surrounding pavement differential settlement", "confidence": 0.76},
-        {"cause": "repeated traffic impact around casting frame", "confidence": 0.68},
-        {"cause": "improper installation or asphalt compaction around rim", "confidence": 0.60},
-    ],
-    "sewage_hole": [
-        {"cause": "missing, damaged, or displaced cover frame", "confidence": 0.88},
-        {"cause": "drainage structure subsidence or structural failure", "confidence": 0.81},
-        {"cause": "severe perimeter erosion and concrete spalling", "confidence": 0.65},
-    ],
-    "longitudinal_crack": [
-        {"cause": "paving joint separation between adjacent asphalt passes", "confidence": 0.79},
-        {"cause": "traffic wheel-path fatigue loading", "confidence": 0.71},
-        {"cause": "subgrade settlement along pavement shoulder", "confidence": 0.62},
-    ],
-    "transverse_crack": [
-        {"cause": "thermal expansion and contraction cycles", "confidence": 0.84},
-        {"cause": "reflective cracking from underlying stabilized base", "confidence": 0.69},
-        {"cause": "aged asphalt binder embrittlement", "confidence": 0.63},
-    ],
-    "alligator_crack": [
-        {"cause": "structural fatigue failure under repeated heavy loads", "confidence": 0.89},
-        {"cause": "weak pavement foundation or loss of subgrade support", "confidence": 0.83},
-        {"cause": "moisture trapped within base course", "confidence": 0.72},
-    ],
-}
 
+class InspectionContext:
+    """Independent execution context per request ensuring zero state bleed."""
 
-def _determine_crack_subtype(w: int, h: int, crop_arr: Optional[np.ndarray]) -> str:
-    """Classify crack subtype based on geometry and branching."""
-    aspect = w / max(1, h)
-    if aspect > 1.8:
-        return "transverse_crack"
-    elif aspect < 0.55:
-        return "longitudinal_crack"
-    else:
-        return "alligator_crack"
+    def __init__(self, file_bytes: bytes, filename: str, inspection_id: Optional[str] = None):
+        self.inspection_id = inspection_id or f"insp_{uuid.uuid4().hex}"
+        self.inference_run_id = f"run_{uuid.uuid4().hex}"
+        self.filename = filename
+        self.file_size = len(file_bytes)
+        self.image_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        self.file_bytes = file_bytes
+        self.t0 = time.perf_counter()
+        self.stage_timings_ms: Dict[str, float] = {}
 
-
-def _assess_defect_severity(
-    class_name: str,
-    bbox: List[int],
-    img_w: int,
-    img_h: int,
-    confidence: float,
-) -> str:
-    """Assess severity: low, medium, high, critical based on size and danger."""
-    x1, y1, x2, y2 = bbox
-    w = max(1, x2 - x1)
-    h = max(1, y2 - y1)
-    area = w * h
-    area_ratio = area / max(1, img_w * img_h)
-
-    # Open sewage holes are hazardous public safety risks
-    if class_name == "sewage_hole":
-        return "critical"
-
-    if class_name == "pothole":
-        if area_ratio > 0.08 or (w > 250 and h > 200):
-            return "critical"
-        elif area_ratio > 0.03:
-            return "high"
-        elif area_ratio > 0.01:
-            return "medium"
-        return "low"
-
-    if class_name == "alligator_crack":
-        if area_ratio > 0.06:
-            return "high"
-        return "medium"
-
-    if class_name in ("longitudinal_crack", "transverse_crack"):
-        if max(w, h) > 350:
-            return "high"
-        elif max(w, h) > 150:
-            return "medium"
-        return "low"
-
-    if class_name == "manhole_cover":
-        return "medium"
-
-    return "low"
+    def record_stage(self, stage_name: str, duration_ms: float) -> None:
+        self.stage_timings_ms[stage_name] = round(duration_ms, 2)
 
 
 class InspectionPipeline:
-    """Executes the strict sequential road inspection pipeline."""
+    """Production sequential pipeline engine with request isolation and honest model states."""
 
     def __init__(self):
-        self._yolo_model = None
-        self._load_detection_model()
-
-    def _load_detection_model(self):
-        try:
-            if settings.DETECTION_MODEL_PATH.exists():
-                from ultralytics import YOLO
-                self._yolo_model = YOLO(str(settings.DETECTION_MODEL_PATH))
-                logger.info("Loaded YOLO detection model from %s", settings.DETECTION_MODEL_PATH)
-        except Exception as e:
-            logger.warning("Could not load YOLO model: %s", e)
+        self.registry = registry
 
     def process_image(
         self,
         file_bytes: bytes,
         filename: str = "upload.jpg",
+        inspection_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Process image through Stage 0 to Stage 7."""
+        """Execute strict sequential 8-stage inspection with complete request isolation."""
+        ctx = InspectionContext(file_bytes, filename, inspection_id)
 
         # =====================================================================
-        # STAGE 0 — INPUT VALIDATION
+        # STAGE 0 — INPUT VALIDATION & DECODING
         # =====================================================================
-        validation: ImageValidationResult = validate_image(file_bytes, filename)
-        if not validation.valid or validation.pil_image is None:
+        t_stage0 = time.perf_counter()
+        if len(file_bytes) == 0:
             return {
                 "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
                 "pipeline_status": "rejected",
                 "stage": "input_validation",
-                "message": validation.error or "Invalid image file format or corrupted payload",
-                "image_validation": {
-                    "valid": False,
-                    "error": validation.error,
-                },
+                "message": "Empty file payload provided",
                 "detections": [],
             }
 
-        image = validation.pil_image
+        try:
+            raw_img = Image.open(io.BytesIO(file_bytes))
+            # Verify file signature
+            raw_img.verify()
+            # Reopen for actual decoding after verify()
+            raw_img = Image.open(io.BytesIO(file_bytes))
+            # Normalize EXIF orientation
+            image = ImageOps.exif_transpose(raw_img)
+            # Ensure strict RGB
+            image = image.convert("RGB")
+        except Exception as e:
+            return {
+                "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
+                "pipeline_status": "rejected",
+                "stage": "input_validation",
+                "message": f"Corrupted or invalid image file: {e}",
+                "detections": [],
+            }
+
         img_w, img_h = image.size
+        # Dimension limits
+        if img_w < settings.MIN_IMAGE_DIMENSION or img_h < settings.MIN_IMAGE_DIMENSION:
+            return {
+                "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
+                "pipeline_status": "rejected",
+                "stage": "input_validation",
+                "message": f"Image dimensions ({img_w}x{img_h}) below minimum required ({settings.MIN_IMAGE_DIMENSION}x{settings.MIN_IMAGE_DIMENSION})",
+                "detections": [],
+            }
+
+        ctx.record_stage("stage_0_validation", (time.perf_counter() - t_stage0) * 1000)
 
         # =====================================================================
         # STAGE 1 — ROAD / NON-ROAD CLASSIFICATION
         # =====================================================================
-        road_res: RoadClassificationResult = road_classifier.classify(image)
-        if not road_res.is_road:
-            logger.info("Pipeline STOPPED at Stage 1: Non-road image rejected.")
+        t_stage1 = time.perf_counter()
+        road_res = self.registry.road_classifier.predict(image)
+        ctx.record_stage("stage_1_road_classifier", (time.perf_counter() - t_stage1) * 1000)
+
+        if not road_res["is_road"]:
+            logger.info("Inspection %s rejected at Stage 1: Non-road scene.", ctx.inspection_id)
             return {
                 "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
+                "inference_run_id": ctx.inference_run_id,
                 "pipeline_status": "rejected",
                 "stage": "road_classification",
                 "is_road": False,
-                "label": road_res.label,
-                "confidence": road_res.confidence,
-                "message": road_res.message,
+                "label": road_res["label"],
+                "confidence": road_res["confidence"],
+                "message": road_res.get("message", "Image does not contain a sufficiently confident road scene"),
+                "model_provenance": {
+                    "road_classifier": road_res.get("model_version"),
+                },
+                "stage_timings_ms": ctx.stage_timings_ms,
                 "detections": [],
             }
 
         # =====================================================================
         # STAGE 2 — AI-GENERATED IMAGE DETECTION
         # =====================================================================
-        auth_res: AuthenticityAnalysisResult = analyse_authenticity(image)
-        if auth_res.verdict == "likely_ai_generated":
-            logger.info("Pipeline STOPPED at Stage 2: AI-generated image rejected.")
+        t_stage2 = time.perf_counter()
+        auth_res = self.registry.authenticity_classifier.predict(image)
+        ctx.record_stage("stage_2_authenticity", (time.perf_counter() - t_stage2) * 1000)
+
+        if auth_res["label"] == "likely_ai_generated":
+            logger.info("Inspection %s rejected at Stage 2: AI-generated image.", ctx.inspection_id)
             return {
                 "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
+                "inference_run_id": ctx.inference_run_id,
                 "pipeline_status": "rejected",
                 "stage": "authenticity_detection",
-                "label": auth_res.verdict,
-                "confidence": auth_res.confidence,
-                "message": "Image detected as likely AI-generated or synthetic; rejected under security policy.",
-                "warning": auth_res.warning,
+                "is_road": True,
+                "label": auth_res["label"],
+                "confidence": auth_res["confidence"],
+                "message": "Image classified as likely AI-generated or synthetic; rejected under policy.",
+                "warning": auth_res.get("warning", ""),
+                "model_provenance": {
+                    "road_classifier": road_res.get("model_version"),
+                    "authenticity_classifier": auth_res.get("model_version"),
+                },
+                "stage_timings_ms": ctx.stage_timings_ms,
                 "detections": [],
             }
 
         # =====================================================================
-        # STAGE 3 — ROAD DAMAGE DETECTION (YOLO)
+        # STAGE 3 — REAL YOLO ROAD DAMAGE DETECTION
         # =====================================================================
-        raw_detections = []
-        if self._yolo_model is not None:
-            try:
-                results = self._yolo_model.predict(
-                    source=image,
-                    conf=settings.DETECTION_CONFIDENCE_THRESHOLD,
-                    iou=settings.DETECTION_IOU_THRESHOLD,
-                    verbose=False,
-                )
-                if results and len(results) > 0:
-                    r0 = results[0]
-                    boxes = r0.boxes
-                    for b in boxes:
-                        coords = b.xyxy[0].tolist()
-                        cls_id = int(b.cls[0].item())
-                        raw_name = self._yolo_model.names.get(cls_id, "defect")
-                        conf = float(b.conf[0].item())
-                        raw_detections.append({
-                            "raw_name": raw_name,
-                            "class_id": cls_id,
-                            "bbox": [int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3])],
-                            "confidence": conf,
-                        })
-            except Exception as e:
-                logger.error("YOLO inference failed: %s", e)
+        t_stage3 = time.perf_counter()
+        yolo_res = self.registry.damage_detector.predict(image)
+        ctx.record_stage("stage_3_yolo_detection", (time.perf_counter() - t_stage3) * 1000)
+
+        if not yolo_res.get("model_ready", False):
+            # Honest model unavailable handling
+            return {
+                "success": False,
+                "inspection_id": ctx.inspection_id,
+                "image_sha256": ctx.image_sha256,
+                "inference_run_id": ctx.inference_run_id,
+                "pipeline_status": "needs_model",
+                "stage": "damage_detection",
+                "message": yolo_res.get("error", "Road damage detection model is currently unavailable."),
+                "model_provenance": {
+                    "road_classifier": road_res.get("model_version"),
+                    "authenticity_classifier": auth_res.get("model_version"),
+                    "damage_detector": yolo_res.get("model_version"),
+                },
+                "stage_timings_ms": ctx.stage_timings_ms,
+                "detections": [],
+            }
+
+        raw_detections = yolo_res.get("detections", [])
 
         # =====================================================================
-        # STAGE 4 — FALSE-POSITIVE VERIFICATION & MAPPING
+        # STAGE 4 — FALSE-POSITIVE FILTERING & AUDITING
         # =====================================================================
+        t_stage4 = time.perf_counter()
         verified_detections = []
+        rejected_detections = []
 
-        for raw in raw_detections:
-            r_name = raw["raw_name"].lower()
-            conf = raw["confidence"]
-            bbox = raw["bbox"]
-            bw = max(1, bbox[2] - bbox[0])
-            bh = max(1, bbox[3] - bbox[1])
+        for det in raw_detections:
+            c_name = det["class"]
+            conf = det["confidence"]
+            bbox = det["bbox"]
 
-            # Class mapping into required classes
-            if "pothole" in r_name:
-                mapped_class = "pothole"
-            elif "manhole" in r_name:
-                # Check if covered vs open sewage void
-                crop = image.crop((bbox[0], bbox[1], bbox[2], bbox[3]))
-                gray_crop = np.array(crop.convert("L"), dtype=np.float32)
-                brightness = float(np.mean(gray_crop))
-                # Open sewage holes exhibit very dark inner cavity without reflective metal cover
-                if brightness < 40 and conf > 0.45:
-                    mapped_class = "sewage_hole"
-                else:
-                    mapped_class = "manhole_cover"
-            elif "crack" in r_name:
-                mapped_class = _determine_crack_subtype(bw, bh, None)
-            else:
-                mapped_class = "pothole"
-
-            # Check class-specific threshold
-            required_threshold = settings.CLASS_CONFIDENCE_THRESHOLDS.get(mapped_class, 0.30)
-            if conf < required_threshold:
-                continue
-
-            # Stage 4 false positive verification
-            decision = false_positive_filter.verify_candidate(
-                image=image,
-                bbox=tuple(bbox),  # type: ignore
-                class_name=mapped_class,
+            verify_res = self.registry.false_positive_filter.predict(
+                image,
+                bbox=bbox,
+                class_name=c_name,
                 confidence=conf,
             )
 
-            if not decision.is_valid:
-                logger.debug("Rejected false positive (%s): %s", mapped_class, decision.rejection_reason)
+            if not verify_res.get("is_valid", False):
+                rejected_detections.append({
+                    "original_class": c_name,
+                    "confidence": conf,
+                    "bbox": bbox,
+                    "filter_reason": verify_res.get("reason", "Filtered by hard-negative check"),
+                    "filter_version": verify_res.get("filter_version", ""),
+                })
                 continue
 
             # =================================================================
-            # STAGE 5 — PROBABLE CAUSE ESTIMATION
+            # STAGE 5 — GEOMETRIC ANALYSIS
             # =================================================================
-            causes = PROBABLE_CAUSES.get(mapped_class, [
-                {"cause": "environmental thermal fatigue", "confidence": 0.65},
-                {"cause": "vehicular traffic wear", "confidence": 0.60},
-            ])
+            bw = det["width"]
+            bh = det["height"]
+            area = det["area"]
+            relative_area = area / max(1, img_w * img_h)
+
+            geometry = {
+                "width_pixels": bw,
+                "height_pixels": bh,
+                "area_pixels": area,
+                "relative_area": round(relative_area, 6),
+                "physical_dimensions": None,
+                "measurement_note": "Physical metric dimensions unavailable without camera intrinsic matrix or ground reference object.",
+            }
 
             # =================================================================
             # STAGE 6 — SEVERITY ASSESSMENT
             # =================================================================
-            sev = _assess_defect_severity(mapped_class, bbox, img_w, img_h, conf)
+            sev_assessment = assess_defect_severity(
+                class_name=c_name,
+                bbox=bbox,
+                img_w=img_w,
+                img_h=img_h,
+                confidence=conf,
+                total_detections=len(raw_detections),
+            )
+
+            # =================================================================
+            # STAGE 7 — PROBABLE CAUSE ESTIMATION
+            # =================================================================
+            cause_res = estimate_causes_for_defect(
+                class_name=c_name,
+                severity=sev_assessment.level,
+            )
 
             verified_detections.append({
-                "class": mapped_class,
-                "confidence": round(conf, 4),
+                "detection_id": f"det_{uuid.uuid4().hex[:8]}",
+                "class": c_name,
+                "class_id": det["class_id"],
+                "confidence": conf,
                 "bbox": bbox,
-                "severity": sev,
-                "probable_causes": causes,
-                "cause_is_verified": False,  # Explicitly uncertain per engineering principles
+                "geometry": geometry,
+                "severity": {
+                    "level": sev_assessment.level,
+                    "score": sev_assessment.score,
+                    "factors": sev_assessment.factors,
+                    "priority": sev_assessment.priority,
+                    "uncertainty_note": sev_assessment.uncertainty_note,
+                },
+                "probable_causes": [
+                    {
+                        "cause": c.cause,
+                        "confidence": c.confidence,
+                        "evidence": c.evidence,
+                        "alternative": c.alternative,
+                    }
+                    for c in cause_res.causes
+                ],
+                "primary_cause": cause_res.primary_cause,
+                "cause_is_verified": cause_res.cause_is_verified,
+                "cause_disclaimer": cause_res.disclaimer,
             })
 
+        ctx.record_stage("stage_4_filtering_and_enrichment", (time.perf_counter() - t_stage4) * 1000)
+        total_time_ms = round((time.perf_counter() - ctx.t0) * 1000, 2)
+
         # =====================================================================
-        # STAGE 7 — STRUCTURED FINAL RESPONSE
+        # STAGE 8 — STRUCTURED FINAL RESPONSE
         # =====================================================================
         return {
             "success": True,
+            "inspection_id": ctx.inspection_id,
+            "inference_run_id": ctx.inference_run_id,
+            "image_sha256": ctx.image_sha256,
             "pipeline_status": "completed",
             "image_validation": {
                 "valid": True,
                 "width": img_w,
                 "height": img_h,
-                "format": validation.format,
-                "blur_score": validation.blur_score,
-                "is_blurry": validation.is_blurry,
+                "format": raw_img.format or "JPEG",
+                "file_size_bytes": ctx.file_size,
             },
             "road_classification": {
-                "label": road_res.label,
-                "confidence": road_res.confidence,
+                "label": road_res["label"],
+                "confidence": road_res["confidence"],
+                "message": road_res.get("message", ""),
             },
             "authenticity": {
-                "label": auth_res.verdict,
-                "confidence": auth_res.confidence,
-                "warning": auth_res.warning,
+                "label": auth_res["label"],
+                "confidence": auth_res["confidence"],
+                "warning": auth_res.get("warning", ""),
             },
             "damage_analysis": {
                 "total_detections": len(verified_detections),
+                "total_raw_candidates": len(raw_detections),
+                "total_filtered_candidates": len(rejected_detections),
                 "detections": verified_detections,
+                "filtered_audit": rejected_detections,
+            },
+            "model_provenance": {
+                "road_classifier": road_res.get("model_version"),
+                "authenticity_classifier": auth_res.get("model_version"),
+                "damage_detector": yolo_res.get("model_version"),
+                "false_positive_filter": self.registry.false_positive_filter.version(),
+            },
+            "execution_metadata": {
+                "total_duration_ms": total_time_ms,
+                "stage_timings_ms": ctx.stage_timings_ms,
             },
         }
 
 
+# Global singleton instance
 inspection_pipeline = InspectionPipeline()

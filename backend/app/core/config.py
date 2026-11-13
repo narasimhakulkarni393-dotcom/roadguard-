@@ -49,20 +49,20 @@ class Settings:
     CORS_ORIGINS: list = ["*"]
 
     # Thresholds
-    ROAD_CONFIDENCE_THRESHOLD: float = 0.50
-    AUTHENTICITY_UNCERTAIN_LOW: float = 0.40
-    AUTHENTICITY_UNCERTAIN_HIGH: float = 0.65
-    DETECTION_CONFIDENCE_THRESHOLD: float = 0.25
-    DETECTION_IOU_THRESHOLD: float = 0.45
+    ROAD_CONFIDENCE_THRESHOLD: float = float(os.getenv("ROAD_CONFIDENCE_THRESHOLD", "0.50"))
+    AUTHENTICITY_UNCERTAIN_LOW: float = float(os.getenv("AUTHENTICITY_UNCERTAIN_LOW", "0.40"))
+    AUTHENTICITY_UNCERTAIN_HIGH: float = float(os.getenv("AUTHENTICITY_UNCERTAIN_HIGH", "0.65"))
+    DETECTION_CONFIDENCE_THRESHOLD: float = float(os.getenv("DETECTION_CONFIDENCE_THRESHOLD", "0.15"))
+    DETECTION_IOU_THRESHOLD: float = float(os.getenv("DETECTION_IOU_THRESHOLD", "0.45"))
 
     # Class-specific detection thresholds to minimize false positives
     CLASS_CONFIDENCE_THRESHOLDS: dict = {
-        "pothole": 0.35,
-        "manhole_cover": 0.35,
-        "sewage_hole": 0.35,
-        "longitudinal_crack": 0.30,
-        "transverse_crack": 0.30,
-        "alligator_crack": 0.30,
+        "pothole": 0.15,
+        "manhole_cover": 0.15,
+        "sewage_hole": 0.15,
+        "longitudinal_crack": 0.14,
+        "transverse_crack": 0.14,
+        "alligator_crack": 0.14,
     }
 
     # Severity thresholds
