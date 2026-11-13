@@ -1,10 +1,12 @@
 """Dataset inspection routes.
 
-Only read-only inspection is implemented. Conversion/prepare workflows are
-declared unsupported instead of returning a canned success payload.
+Only read-only inspection is implemented. Preparation runs offline through
+training/prepare_kaggle_dataset.py; the HTTP endpoint says so instead of
+pretending a job started.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -40,43 +42,78 @@ def _count_files(directory: Path) -> int:
 @router.get("/status")
 @router.get("")
 async def dataset_status():
-    raw_dir = DATASET_ROOT / "raw"
-    processed_dir = DATASET_ROOT / "processed"
+    rdd_raw = DATASET_ROOT / "raw" / "rdd2022"
+    rdd_processed = DATASET_ROOT / "processed" / "rdd2022"
+    rdd_raw_count = _count_files(rdd_raw)
+    rdd_processed_count = _count_files(rdd_processed)
 
-    raw_count = _count_files(raw_dir)
-    processed_count = _count_files(processed_dir)
+    datasets = [
+        {
+            "id": "rdd2022",
+            "name": "Road Damage Dataset 2022 (RDD2022)",
+            "source": "https://github.com/sekilab/RoadDamageDetector",
+            "licence": "CC BY 4.0",
+            "classes": [
+                "D00: Longitudinal Crack",
+                "D10: Transverse Crack",
+                "D20: Alligator Crack",
+                "D40: Pothole",
+            ],
+            "status": "ready" if rdd_processed_count > 0 else "unprepared",
+            "raw_files": rdd_raw_count,
+            "processed_files": rdd_processed_count,
+        },
+        {
+            "id": "genimage",
+            "name": "GenImage (AI-Generated Image Detection)",
+            "source": "https://github.com/GenImage-Dataset/GenImage",
+            "licence": "Research Use Only",
+            "classes": ["nature", "ai_generated"],
+            "status": "unprepared",
+            "raw_files": 0,
+            "processed_files": 0,
+        },
+    ]
+
+    kaggle_dir = DATASET_ROOT / "processed" / "kaggle_road_damage"
+    manifest_path = kaggle_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not read dataset manifest %s: %s", manifest_path, exc)
+            manifest = None
+        if manifest:
+            splits = manifest.get("splits", {})
+            processed = sum(int(split.get("images", 0)) for split in splits.values())
+            class_names: list[str] = []
+            for split in splits.values():
+                for name in split.get("instances", {}):
+                    if name not in class_names:
+                        class_names.append(name)
+            datasets.insert(
+                0,
+                {
+                    "id": "kaggle_road_damage",
+                    "name": "Kaggle Road Damage — Potholes, Cracks and Manholes",
+                    "source": f"https://www.kaggle.com/datasets/{manifest.get('dataset', '')}",
+                    "licence": manifest.get("license", "Not declared"),
+                    "citation": manifest.get("citation"),
+                    "classes": class_names,
+                    "status": "ready" if processed > 0 else "unprepared",
+                    "raw_files": 0,
+                    "processed_files": processed,
+                    "split_counts": {name: int(split.get("images", 0)) for name, split in splits.items()},
+                    "prepared_at": manifest.get("prepared_at"),
+                    "resolved_version": manifest.get("resolved_version"),
+                },
+            )
 
     return {
-        "datasets": [
-            {
-                "id": "rdd2022",
-                "name": "Road Damage Dataset 2022 (RDD2022)",
-                "source": "https://github.com/sekilab/RoadDamageDetector",
-                "licence": "CC BY 4.0",
-                "classes": [
-                    "D00: Longitudinal Crack",
-                    "D10: Transverse Crack",
-                    "D20: Alligator Crack",
-                    "D40: Pothole",
-                ],
-                "status": "ready" if processed_count > 0 else "unprepared",
-                "raw_files": raw_count,
-                "processed_files": processed_count,
-            },
-            {
-                "id": "genimage",
-                "name": "GenImage (AI-Generated Image Detection)",
-                "source": "https://github.com/GenImage-Dataset/GenImage",
-                "licence": "Research Use Only",
-                "classes": ["nature", "ai_generated"],
-                "status": "unprepared",
-                "raw_files": 0,
-                "processed_files": 0,
-            },
-        ],
+        "datasets": datasets,
         "summary": {
-            "total_raw_files": raw_count,
-            "total_processed_files": processed_count,
+            "total_raw_files": sum(item["raw_files"] for item in datasets),
+            "total_processed_files": sum(item["processed_files"] for item in datasets),
             "storage_path": str(DATASET_ROOT),
         },
     }
@@ -128,7 +165,8 @@ async def prepare_dataset(req: DatasetActionRequest):
     raise HTTPException(
         status_code=501,
         detail=(
-            "Dataset preparation (annotation conversion and train/val splits) is not implemented. "
-            "Provide a YOLO-format dataset and a data.yaml instead."
+            "Dataset preparation is not exposed over HTTP. Run it offline with "
+            "`python -m training.prepare_kaggle_dataset` (Kaggle road-damage corpus) or "
+            "`python -m ml.datasets.convert_voc_to_yolo` (RDD2022), then reload this page."
         ),
     )

@@ -29,8 +29,9 @@ transverse crack, `D20` alligator crack, `D40` pothole).
 5. **Canonical pothole registry** — merged reports, evidence, location history, status history
    and guarded lifecycle transitions (`reported → verified → scheduled → in_progress →
    repaired → closed`, plus rejection paths).
-6. **Operations pages** — dashboard, analytics, dataset provenance, training console that
-   honestly reports `501` while training is unbundled.
+6. **Operations pages** — dashboard, analytics, dataset provenance and a training console.
+   Training runs offline through `training/` CLI scripts; the HTTP training endpoints answer
+   `501` instead of pretending a job started.
 
 ## Stack
 
@@ -143,17 +144,22 @@ at it. Until a reachable backend is configured, the deployed UI renders its expl
 
 ## Honest limitations
 
-- No accuracy, recall or mAP claims are made for the detector. No labelled evaluation set was
-  provided and no evaluation was run.
+- Detector metrics are reported only when produced by a held-out split evaluation, and only
+  for the dataset the model was trained on (see `docs/MODEL_CARD.md`). They do not transfer
+  automatically to other roads, cameras or weather.
 - Road and authenticity classifiers are heuristics, not trained networks.
 - The duplicate descriptor is engineered (not a learned embedding); visual-only similarity on
   uniform synthetic crops can be misleading. Recalibrate on a labelled re-visit dataset.
 - Severity uses 2D pixel geometry; real-world dimensions require camera calibration.
 - Video analysis samples frames (default 2 fps, max 300); it does not decode every frame.
-- Training endpoints return `501`: no curated dataset or training runtime is bundled.
+- Training is not exposed over HTTP (`501` by design). Run it offline with the commands in
+  `docs/TRAINING_GUIDE.md`; it is CPU-bound and takes hours on a laptop.
 - `POST /api/v1/feedback` still returns an id without persisting; inspection deletion leaves
   evidence files on disk. Both are documented, not silently claimed as done.
 
 ## Dataset & license
 
-RDD2022 / Sekilab — CC BY 4.0. Platform code: MIT (see `docs/DATASET_ATTRIBUTION.md`).
+- Detector training data: [Kaggle Road Damage Dataset](https://www.kaggle.com/datasets/lorenzoarcioni/road-damage-dataset-potholes-cracks-and-manholes)
+  — MIT per Kaggle metadata, cite the authors via [doi:10.5281/zenodo.17834373](https://doi.org/10.5281/zenodo.17834373).
+- RDD2022 / Sekilab — CC BY 4.0.
+- Platform code: MIT (see `docs/DATASET_ATTRIBUTION.md`).

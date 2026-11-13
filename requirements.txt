@@ -24,6 +24,9 @@ torchvision>=0.19
 ultralytics>=8.3
 huggingface_hub>=0.30
 
+# Dataset preparation (training is offline; see docs/TRAINING_GUIDE.md)
+kagglehub>=1.0
+
 # Testing
 httpx>=0.27.0
 pytest>=8.3.0

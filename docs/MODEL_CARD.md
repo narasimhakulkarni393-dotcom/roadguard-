@@ -23,10 +23,22 @@ made for either provider, and neither has been evaluated on a labelled road-dama
 
 ## Model Details
 - **Developer**: RoadGuard AI Team
-- **Model Architecture**: Ultralytics YOLOv8 (yolov8n / yolov8s backbone)
-- **Task**: 2D Object Detection for Pavement Defects
-- **Input Resolution**: 640x640 RGB images
-- **Classes**: D00 (Longitudinal), D10 (Transverse), D20 (Alligator), D40 (Pothole)
+- **Model Architecture**: Ultralytics YOLOv8n, fine-tuned from the bundled `yolov8n.pt`
+- **Task**: 2D object detection for pavement defects
+- **Input Resolution**: trained at 480 px (native dataset images are 640×360)
+- **Learned classes**: `pothole`, `crack`, `manhole` (the dataset's three classes)
+- **API taxonomy**: six canonical labels; crack subtype and manhole-vs-open-sewage are
+  derived by deterministic rules, not learned (see `docs/TRAINING_GUIDE.md`)
+
+## Training data
+- **Source**: Kaggle [Road Damage Dataset: Potholes, Cracks and Manholes](https://www.kaggle.com/datasets/lorenzoarcioni/road-damage-dataset-potholes-cracks-and-manholes),
+  version 4, MIT per Kaggle metadata, citation [doi:10.5281/zenodo.17834373](https://doi.org/10.5281/zenodo.17834373).
+- **Content**: 2,009 images, 4,733 valid boxes (1,261 pothole / 2,517 crack / 955 manhole);
+  four malformed label lines dropped and recorded in the manifest.
+- **Splits**: seeded (42) stratified 80/10/10 — 1,607 train / 201 val / 201 test images.
+  The test split is never used for training or checkpoint selection.
+- **Provenance and counts**: `datasets/processed/kaggle_road_damage/manifest.json`
+  (generated; the corpus itself is git-ignored).
 
 ## Intended Use
 - **Primary Use**: Assistance in road network asset management, surveying, prioritizing repairs.

@@ -59,3 +59,4 @@ datasets/processed/*
 models/runs/
 runs/
 !models/detection/best.pt
+models/detection/best.backup_*.pt

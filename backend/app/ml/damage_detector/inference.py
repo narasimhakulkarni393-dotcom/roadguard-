@@ -17,6 +17,10 @@ def get_damage_detector() -> BaseModelInterface:
             from app.ml.damage_detector.hf_inference import HuggingFaceDamageDetector
 
             _model_instance = HuggingFaceDamageDetector()
+        elif settings.DETECTION_PROVIDER == "gemini":
+            from app.ml.damage_detector.gemini_vision import GeminiDamageDetector
+
+            _model_instance = GeminiDamageDetector()
         else:
             from app.ml.damage_detector.model import DamageDetectorModel
 

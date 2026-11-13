@@ -1,8 +1,9 @@
 """Training job routes.
 
-Training orchestration is intentionally not implemented in this build: there is
-no labelled dataset committed to the repository and no GPU scheduler. The
-endpoints answer 501 instead of pretending a job started.
+Training orchestration is intentionally not exposed over HTTP: there is no job
+scheduler and no committed dataset. Training runs offline through
+training/train_damage_detector.py; the endpoints answer 501 instead of
+pretending a job started.
 """
 from __future__ import annotations
 
@@ -21,8 +22,9 @@ router = APIRouter(
 )
 
 _NOT_IMPLEMENTED = (
-    "Model training is not implemented in this deployment. "
-    "It requires a curated, split dataset plus a training runtime; neither is bundled."
+    "Training is not exposed over HTTP. Run it offline: "
+    "`python -m training.prepare_kaggle_dataset` then `python -m training.train_damage_detector`. "
+    "See docs/TRAINING_GUIDE.md."
 )
 
 
