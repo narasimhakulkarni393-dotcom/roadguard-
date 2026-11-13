@@ -63,7 +63,10 @@ export default function TrainingPage() {
         body: JSON.stringify(payload),
       })
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}))
+        throw new Error(errJson.detail || `HTTP ${res.status}`)
+      }
       const json = await res.json()
       setActiveJobId(json.job_id)
       setJobStatus(json.status)

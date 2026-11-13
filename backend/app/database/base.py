@@ -12,4 +12,5 @@ def gen_uuid() -> str:
 
 
 def now_utc() -> datetime.datetime:
-    return datetime.datetime.utcnow()
+    """Naive UTC timestamp (stored columns are timezone-naive)."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)

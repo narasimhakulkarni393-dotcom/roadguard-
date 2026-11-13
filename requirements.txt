@@ -1,34 +1,29 @@
-# Hackvally Production & Development Dependencies
-# Python 3.12+
+# PitScout backend dependencies
+# Python 3.11+ (verified on 3.14 with the versions below)
 
-# Core Web Framework
+# Core web framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 starlette>=0.38.0
-
-# Validation and Settings
-pydantic>=2.8.0
-pydantic-settings>=2.4.0
-email-validator>=2.2.0
-
-# Database & ORM
-sqlalchemy[asyncio]>=2.0.30
-greenlet>=3.0.0
-alembic>=1.13.0
-asyncpg>=0.29.0
-psycopg2-binary>=2.9.9
-aiosqlite>=0.20.0
-
-# Security & Authentication
-argon2-cffi>=23.1.0
-pyjwt[crypto]>=2.9.0
 python-multipart>=0.0.9
+aiofiles>=24.1.0
 
-# Testing & Client
+# Validation and settings
+pydantic>=2.8.0
+
+# Database & ORM (backend uses sync SQLAlchemy on SQLite)
+sqlalchemy>=2.0.30
+psycopg2-binary>=2.9.9
+
+# Computer vision / ML inference
+numpy>=1.26
+Pillow>=10.4
+opencv-python-headless>=4.10
+torch>=2.4
+torchvision>=0.19
+ultralytics>=8.3
+
+# Testing
 httpx>=0.27.0
 pytest>=8.3.0
 pytest-asyncio>=0.23.8
-pytest-cov>=5.0.0
-
-# Existing integration
-ollama>=0.3.0

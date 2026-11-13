@@ -1,14 +1,21 @@
-"""Models info route."""
-from fastapi import APIRouter
+"""Model inventory route."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
+
+from app.core.auth import verify_api_key
 from app.core.config import settings
 
-router = APIRouter(prefix="/api/v1/models", tags=["models"])
+router = APIRouter(
+    prefix="/api/v1/models",
+    tags=["models"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.get("")
 async def list_models():
     detection_exists = settings.DETECTION_MODEL_PATH.exists()
-    authenticity_exists = settings.AUTHENTICITY_MODEL_PATH.exists()
     return {
         "models": [
             {
@@ -25,15 +32,15 @@ async def list_models():
                     "5": "alligator_crack",
                 },
                 "thresholds": settings.CLASS_CONFIDENCE_THRESHOLDS,
-                "metrics": {
-                    "mAP50": 0.71,
-                    "precision": 0.74,
-                    "recall": 0.68,
-                },
+                # No held-out evaluation has been run against the traffic
+                # domain, so no accuracy numbers are reported.
+                "metrics": None,
+                "metrics_note": "Not evaluated on a held-out set. No accuracy claim is made.",
             },
             {
                 "name": "Road Scene Binary Classifier",
                 "type": "scene_classification",
+                "implementation": "heuristic (spectral/statistical)",
                 "ready": True,
                 "threshold": settings.ROAD_CONFIDENCE_THRESHOLD,
                 "classes": ["road", "non_road", "uncertain"],
@@ -41,6 +48,7 @@ async def list_models():
             {
                 "name": "Image Authenticity Forensic Classifier",
                 "type": "authenticity_detection",
+                "implementation": "heuristic (FFT + Laplacian)",
                 "ready": True,
                 "classes": ["likely_real", "likely_ai_generated", "uncertain"],
                 "policy": "Strict rejection on likely_ai_generated",

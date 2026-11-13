@@ -40,3 +40,16 @@ def test_inspect_valid_x_api_key_header():
     headers = {"X-API-Key": VALID_KEY}
     res = client.post("/api/v1/inspect", headers=headers)
     assert res.status_code == 422
+
+
+def test_unset_key_fails_closed(monkeypatch):
+    """A missing ROADGUARD_API_KEY must never degrade into open access."""
+    monkeypatch.setattr(settings, "API_KEY", "")
+    res = client.get("/api/v1/inspections", headers={"X-API-Key": "anything"})
+    assert res.status_code == 503
+    assert "not configured" in res.json()["detail"].lower()
+
+
+def test_data_endpoints_require_auth():
+    for path in ("/api/v1/inspections", "/api/v1/analytics/overview", "/api/v1/models", "/api/v1/reports"):
+        assert client.get(path).status_code == 401, path

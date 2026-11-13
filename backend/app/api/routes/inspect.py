@@ -1,19 +1,24 @@
 """Inspect API endpoints for single and batch image road inspection."""
 from __future__ import annotations
 
-import uuid
 import datetime
+import json
+import logging
+import uuid
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.core.auth import verify_api_key
 from app.core.config import settings
+from app.database.base import now_utc
 from app.services.inspection_pipeline import inspection_pipeline
 from app.database.session import get_db, SessionLocal
 from app.models.database import Inspection, Analysis
-import json
 
+logger = logging.getLogger("pitscout.routes.inspect")
 router = APIRouter(prefix="/api/v1", tags=["inspection"])
 
 MAX_BYTES = settings.MAX_FILE_SIZE_MB * 1024 * 1024
@@ -48,9 +53,10 @@ async def inspect_road_image(
             detail="Uploaded file payload is empty",
         )
 
-    # 2. Run pipeline with request isolation
+    # 2. Run pipeline with request isolation (off the event loop)
     inspection_id = str(uuid.uuid4())
-    result = inspection_pipeline.process_image(
+    result = await run_in_threadpool(
+        inspection_pipeline.process_image,
         file_bytes,
         file.filename or "upload.jpg",
         inspection_id=inspection_id,
@@ -59,13 +65,14 @@ async def inspect_road_image(
     # 3. Save inspection record to database
     db = SessionLocal()
     try:
+        timestamp = now_utc()
         insp = Inspection(
             id=inspection_id,
             status="completed" if result.get("success") else "rejected",
             original_filename=file.filename,
             file_size=len(file_bytes),
-            created_at=datetime.datetime.utcnow(),
-            updated_at=datetime.datetime.utcnow(),
+            created_at=timestamp,
+            updated_at=timestamp,
         )
         an = Analysis(
             id=str(uuid.uuid4()),
@@ -73,14 +80,15 @@ async def inspect_road_image(
             status="completed" if result.get("success") else "rejected",
             pipeline_stage=result.get("stage", "completed"),
             result_json=json.dumps(result),
-            started_at=datetime.datetime.utcnow(),
-            completed_at=datetime.datetime.utcnow(),
+            started_at=timestamp,
+            completed_at=timestamp,
         )
         db.add(insp)
         db.add(an)
         db.commit()
     except Exception:
         db.rollback()
+        logger.exception("Failed to persist inspection %s", inspection_id)
     finally:
         db.close()
 

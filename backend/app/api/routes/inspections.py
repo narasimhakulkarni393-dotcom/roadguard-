@@ -1,13 +1,19 @@
 """Inspections management routes."""
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.auth import verify_api_key
+from app.core.config import settings
 from app.database.session import get_db
-from app.models.database import Inspection, Analysis
+from app.models.database import Analysis, Inspection
 
-router = APIRouter(tags=["inspections"])
+logger = logging.getLogger("pitscout.routes.inspections")
+router = APIRouter(tags=["inspections"], dependencies=[Depends(verify_api_key)])
 
 
 @router.get("/api/v1/inspections")
@@ -65,6 +71,19 @@ async def delete_inspection(inspection_id: str, db: Session = Depends(get_db)):
     item = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Inspection not found.")
+    stored = Path(item.image_path) if item.image_path else None
+    analysis_ids = [a.id for a in item.analyses]
     db.delete(item)
     db.commit()
+
+    candidates = []
+    if stored is not None:
+        candidates.append(stored)
+    candidates.extend(settings.ANNOTATED_DIR / f"{aid}_annotated.jpg" for aid in analysis_ids)
+    for path in candidates:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError as exc:
+            logger.warning("Could not remove file %s: %s", path, exc)
     return None

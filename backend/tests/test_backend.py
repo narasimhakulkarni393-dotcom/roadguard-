@@ -5,6 +5,7 @@ from PIL import Image
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import settings
 from app.database.session import init_db
 from app.services.image_validation import validate_image
 from app.services.authenticity_service import analyse_authenticity
@@ -15,6 +16,7 @@ from app.services.cause_service import analyse_causes, get_recommended_actions
 
 init_db()
 client = TestClient(app)
+AUTH_HEADERS = {"X-API-Key": settings.API_KEY}
 
 
 def create_test_image(width=640, height=480, color=(100, 100, 100)) -> bytes:
@@ -50,6 +52,7 @@ def test_unsupported_file_rejection():
     res = client.post(
         "/api/v1/analysis/image",
         files={"file": ("malicious.exe", fake_bytes, "application/octet-stream")},
+        headers=AUTH_HEADERS,
     )
     assert res.status_code == 422
 
@@ -125,7 +128,7 @@ def test_cause_engine():
 
 # 9. Analytics overview endpoint
 def test_analytics_overview():
-    res = client.get("/api/v1/analytics/overview")
+    res = client.get("/api/v1/analytics/overview", headers=AUTH_HEADERS)
     assert res.status_code == 200
     data = res.json()
     assert "total_inspections" in data
@@ -134,8 +137,19 @@ def test_analytics_overview():
 
 # 10. Models endpoint
 def test_models_endpoint():
-    res = client.get("/api/v1/models")
+    res = client.get("/api/v1/models", headers=AUTH_HEADERS)
     assert res.status_code == 200
     data = res.json()
     assert "models" in data
     assert len(data["models"]) >= 2
+    # No fabrication: accuracy is only reported after real evaluation.
+    assert data["models"][0]["metrics"] is None
+
+
+# 11. Data routes are protected
+def test_analytics_requires_auth():
+    assert client.get("/api/v1/analytics/overview").status_code == 401
+
+
+def test_inspections_requires_auth():
+    assert client.get("/api/v1/inspections").status_code == 401

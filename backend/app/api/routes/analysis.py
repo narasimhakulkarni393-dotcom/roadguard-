@@ -13,15 +13,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 
+from app.core.auth import verify_api_key
 from app.core.config import settings
 from app.database.session import get_db
 from app.models.database import Analysis, Inspection
 from app.schemas.analysis import AnalysisResponse, AnalysisStatusResponse
+from app.services.image_validation import validate_image
 from app.storage.local_storage import save_upload
 from app.workers.job_manager import run_analysis_pipeline
 
-logger = logging.getLogger("roadguard.routes.analysis")
-router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
+logger = logging.getLogger("pitscout.routes.analysis")
+router = APIRouter(
+    prefix="/api/v1/analysis",
+    tags=["analysis"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 MAX_BYTES = settings.MAX_FILE_SIZE_MB * 1024 * 1024
 
@@ -50,6 +56,10 @@ async def upload_image(
         )
     if len(file_bytes) == 0:
         raise HTTPException(status_code=422, detail="Uploaded file is empty.")
+
+    validation = validate_image(file_bytes, file.filename or "upload.jpg")
+    if not validation.valid:
+        raise HTTPException(status_code=422, detail=validation.error or "Invalid image file.")
 
     # Save to disk
     image_path = await save_upload(file_bytes, file.filename or "upload.jpg")
@@ -141,7 +151,9 @@ async def get_analysis_result(analysis_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{analysis_id}/annotated-image")
-async def get_annotated_image(analysis_id: str):
+async def get_annotated_image(analysis_id: str, db: Session = Depends(get_db)):
+    if not db.query(Analysis).filter(Analysis.id == analysis_id).first():
+        raise HTTPException(status_code=404, detail="Analysis not found.")
     path = settings.ANNOTATED_DIR / f"{analysis_id}_annotated.jpg"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Annotated image not available.")

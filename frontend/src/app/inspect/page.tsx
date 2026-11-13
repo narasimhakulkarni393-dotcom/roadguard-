@@ -167,38 +167,30 @@ export default function InspectPage() {
     const y2 = Array.isArray(d.bbox) ? d.bbox[3] : (d.bbox?.y2 ?? 0)
     const w = Math.max(1, Math.abs(x2 - x1))
     const h = Math.max(1, Math.abs(y2 - y1))
-    const className = d.class_name || d.class || 'pothole'
-    const sevLevel = typeof d.severity === 'string' ? d.severity.toUpperCase() : (d.severity?.level || 'HIGH')
-    const sevScore = typeof d.severity === 'object' && d.severity?.score ? d.severity.score : (sevLevel === 'CRITICAL' ? 95 : sevLevel === 'HIGH' ? 82 : sevLevel === 'MODERATE' || sevLevel === 'MEDIUM' ? 55 : 30)
+    const className = d.class_name || d.class || 'unknown'
+    const sevLevel = typeof d.severity === 'string' ? d.severity.toUpperCase() : (d.severity?.level || 'UNKNOWN')
+    const geometry = d.measurements || d.geometry || {}
 
+    // Never invent severity scores, causes or actions: absent fields stay empty.
     return {
       ...d,
       detection_id: d.detection_id || `det-${String(idx + 1).padStart(2, '0')}`,
       class_name: className,
       bbox: { x1, y1, x2, y2 },
       measurements: {
-        width_pixels: d.measurements?.width_pixels || w,
-        height_pixels: d.measurements?.height_pixels || h,
-        area_pixels: d.measurements?.area_pixels || (w * h),
-        relative_area: d.measurements?.relative_area || ((w * h) / (1280 * 720)),
-        limitation: d.measurements?.limitation,
+        width_pixels: geometry.width_pixels ?? w,
+        height_pixels: geometry.height_pixels ?? h,
+        area_pixels: geometry.area_pixels ?? (w * h),
+        relative_area: geometry.relative_area ?? ((w * h) / (1280 * 720)),
+        limitation: geometry.limitation || geometry.measurement_note,
       },
       severity: {
         level: sevLevel,
-        score: sevScore,
-        factors: d.severity?.factors || [
-          { name: 'impact', contribution: 30 },
-          { name: 'area', contribution: 25 },
-        ],
+        score: typeof d.severity?.score === 'number' ? d.severity.score : null,
+        factors: Array.isArray(d.severity?.factors) ? d.severity.factors : [],
       },
-      probable_causes: d.probable_causes || [
-        { cause: 'water infiltration and subgrade softening', confidence: 0.82 },
-        { cause: 'repeated vehicle axle loading and fatigue', confidence: 0.74 },
-      ],
-      recommended_actions: d.recommended_actions || [
-        'Dispatch asphalt patching crew for cold or hot mix compaction.',
-        'Seal surrounding joint perimeter to avoid moisture penetration.',
-      ]
+      probable_causes: d.probable_causes || [],
+      recommended_actions: d.recommended_actions || [],
     }
   })
 

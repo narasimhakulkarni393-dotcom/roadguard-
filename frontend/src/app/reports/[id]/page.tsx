@@ -103,7 +103,7 @@ function ReportContent() {
               Official Assessment Dossier
             </span>
             <h1 className="text-2xl md:text-3xl font-extrabold text-white mt-1 print:text-black">
-              RoadGuard AI &mdash; Pavement Inspection Report
+              PitScout &mdash; Pavement Inspection Report
             </h1>
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400 mt-2 font-mono print:text-gray-600">
               <span className="flex items-center gap-1">

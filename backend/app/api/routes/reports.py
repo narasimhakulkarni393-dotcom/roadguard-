@@ -6,10 +6,15 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.auth import verify_api_key
 from app.database.session import get_db
 from app.models.database import Analysis
 
-router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
+router = APIRouter(
+    prefix="/api/v1/reports",
+    tags=["reports"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.get("/{analysis_id}")

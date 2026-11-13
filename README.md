@@ -1,70 +1,118 @@
-# RoadGuard AI — AI-Powered Road Damage Detection & Infrastructure Intelligence Platform
+# PitScout — Pothole Detection, Video Tracking & Geotagged Road Intelligence
 
-RoadGuard AI is an infrastructure inspection platform engineered for detecting, localizing, measuring, and analyzing road damage (potholes and cracks) using deep learning and explainable computer vision.
+PitScout is an infrastructure inspection platform for detecting, measuring and tracking road
+damage (potholes and cracks), plus collecting geotagged citizen reports and resolving duplicate
+reports into canonical, auditable pothole records.
 
-Built according to the international **CRDDC RDD2022** road damage benchmark.
+It builds on the original RoadGuard image-inspection codebase. The existing 8-stage image
+pipeline and UI were preserved; video tracking, GPS reporting, duplicate identification, the
+canonical pothole registry and a server-side API proxy were added.
 
----
-
-## 🌟 Key Features
-
-1. **8-Stage AI Intelligence Pipeline**:
-   - **Stage 1 (Image Validation)**: EXIF orientation correction, dimension recording, cryptographic MD5 hashing, Laplacian blur detection, and photometric exposure evaluation.
-   - **Stage 2 (Authenticity Screening)**: Multi-factor heuristic & ML analysis to assess whether an image is natural, camera-captured, or synthetic/manipulated.
-   - **Stage 3 (Damage Detection)**: YOLOv8 object detection targeting CRDDC classes:
-     - `D00`: Longitudinal Crack
-     - `D10`: Transverse Crack
-     - `D20`: Alligator Crack
-     - `D40`: Pothole
-   - **Stage 4 (Localization & Visual Overlays)**: Interactive SVG bounding box rendering with class-coded colors, confidence labels, and side-by-side comparison slider.
-   - **Stage 5 (Dimensional Measurement)**: Pixel area, bounding width/height, shape aspect ratios, and relative damage percentages.
-   - **Stage 6 (Explainable Severity Scoring)**: Multi-factor scoring (0–100) and categorical grading (LOW, MODERATE, HIGH, CRITICAL).
-   - **Stage 7 (Engineering Cause Diagnostics)**: Hypotheses regarding pavement distress mechanisms (water ingress, subgrade fatigue, thermal stress).
-   - **Stage 8 (Remediation & Reporting)**: Structured inspection dossiers with printable PDF layout and inspection history.
-
-2. **Technology Stack**:
-   - **Frontend**: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS, Framer Motion, Recharts, Lucide Icons, React Dropzone, React Compare Slider.
-   - **Backend**: FastAPI, Python 3.11+, Pydantic v2, SQLAlchemy 2.0 (SQLite WAL mode locally, PostgreSQL ready), OpenCV, Pillow, PyTorch, Ultralytics YOLOv8.
-   - **Training Pipeline**: Independent CLI scripts for Pascal VOC to YOLO conversion, dataset validation, YOLOv8 fine-tuning, and model evaluation.
+Detection follows the **CRDDC RDD2022** class scheme (`D00` longitudinal crack, `D10`
+transverse crack, `D20` alligator crack, `D40` pothole).
 
 ---
 
-## 🚀 Quick Start
+## Features
 
-### 1. Backend Setup
+1. **Image inspection** — 8-stage pipeline: validation → road gate → authenticity gate → YOLO →
+   false-positive filter → geometry → explainable severity → cause hypotheses → report.
+2. **Video survey** — sampled-frame detection with deterministic IoU/centroid tracking. One
+   physical defect seen across frames yields one tracked defect with first/last timestamps,
+   severity, probable causes and a keyframe crop. AI-generated video is rejected under policy.
+3. **Geotagged reports** — browser GPS (explicit button) or manual coordinates. Missing GPS
+   leaves the report `pending_location_verification`; coordinates are never invented.
+4. **Duplicate identification** — candidate search by accuracy-aware radius, Lab-histogram +
+   gradient-orientation visual similarity, and shape similarity. `MATCH` requires the combined
+   score ≥ 0.72 **and** visual similarity ≥ 0.55, so proximity alone never merges records.
+   Every submission is preserved; uncertain cases are queued for review.
+5. **Canonical pothole registry** — merged reports, evidence, location history, status history
+   and guarded lifecycle transitions (`reported → verified → scheduled → in_progress →
+   repaired → closed`, plus rejection paths).
+6. **Operations pages** — dashboard, analytics, dataset provenance, training console that
+   honestly reports `501` while training is unbundled.
+
+## Stack
+
+- **Backend**: FastAPI, Python 3.11+, Pydantic v2, SQLAlchemy 2, SQLite WAL (PostgreSQL-ready),
+  OpenCV, Pillow, Ultralytics YOLOv8.
+- **Frontend**: Next.js 16 App Router, React 19, TypeScript, Tailwind CSS, Recharts, Lucide.
+
+---
+
+## Quick start (local)
+
+### 1. Backend
+
 ```bash
 cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# create .env with at least: ROADGUARD_API_KEY=<long-random-secret>
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
 ```
-API Docs available at: `http://localhost:8000/docs`  
-Health check: `http://localhost:8000/api/v1/health`
 
-### 2. Frontend Setup
+Health: `http://127.0.0.1:8001/api/v1/health` · Schema: `http://127.0.0.1:8001/docs`
+
+Port 8000 is the conventional default, but this workspace was verified on **8001** because a
+pre-existing service already occupied 8000. Use whichever port is free and point the frontend
+at it.
+
+### 2. Frontend
+
+Create `frontend/.env.local` (see `frontend/.env.example`):
+
+```
+BACKEND_URL=http://127.0.0.1:8001
+ROADGUARD_API_KEY=<same secret as the backend>
+```
+
 ```bash
 cd frontend
 npm install
-npm run dev -- --port 3000
+npm run build
+npm start -- --port 3000
 ```
-Open in browser: `http://localhost:3000`
+
+Open `http://127.0.0.1:3000`.
+
+The API key is server-only. Next.js route handlers under `frontend/src/app/api/v1/*` attach it.
+Never place it in `NEXT_PUBLIC_*` variables.
+
+### Verified local URLs
+
+| Service | URL | Notes |
+| --- | --- | --- |
+| Frontend | `http://127.0.0.1:3000` | Production build verified |
+| Backend | `http://127.0.0.1:8001` | PitScout 1.1.0 |
+| Health (proxied) | `http://127.0.0.1:3000/api/v1/health` | No key required |
 
 ---
 
-## 🔬 Dataset & Training
+## Documentation
 
-RoadGuard AI uses the **RDD2022** multi-national road damage dataset (CC BY 4.0).
-
-To train the YOLOv8 detection model:
-```bash
-# 1. Convert dataset from Pascal VOC to YOLO format
-python -m ml.datasets.convert_voc_to_yolo --input datasets/raw/rdd2022 --output datasets/processed/rdd2022
-
-# 2. Run detection training
-python -m ml.detection.train --dataset datasets/processed/rdd2022 --epochs 50 --batch 8 --device cpu
-```
-When trained, place the resulting `best.pt` in `models/detection/best.pt`. The backend automatically loads it.
+| Document | Contents |
+| --- | --- |
+| `SYSTEM_ARCHITECTURE.md` | Components, pipelines, data model, matching policy, security |
+| `API_DOCUMENTATION.md` | Every endpoint with status, auth and payloads |
+| `DATABASE_SCHEMA.md` | Tables, relationships, lifecycle constraints |
+| `TESTING_REPORT.md` | Executed tests and manual smoke results, with limitations |
+| `DEVELOPMENT_ROADMAP.md` | Phase status, decisions, blockers |
+| `docs/MODEL_CARD.md`, `docs/DATASET_ATTRIBUTION.md`, `docs/TRAINING_GUIDE.md` | Model and data governance |
 
 ---
 
-## 🛡️ License & Attributions
-- Dataset: RDD2022 / Sekilab (CC BY 4.0)
-- Platform: RoadGuard AI (MIT)
+## Honest limitations
+
+- No accuracy, recall or mAP claims are made for the detector. No labelled evaluation set was
+  provided and no evaluation was run.
+- Road and authenticity classifiers are heuristics, not trained networks.
+- The duplicate descriptor is engineered (not a learned embedding); visual-only similarity on
+  uniform synthetic crops can be misleading. Recalibrate on a labelled re-visit dataset.
+- Severity uses 2D pixel geometry; real-world dimensions require camera calibration.
+- Video analysis samples frames (default 2 fps, max 300); it does not decode every frame.
+- Training endpoints return `501`: no curated dataset or training runtime is bundled.
+- `POST /api/v1/feedback` still returns an id without persisting; inspection deletion leaves
+  evidence files on disk. Both are documented, not silently claimed as done.
+
+## Dataset & license
+
+RDD2022 / Sekilab — CC BY 4.0. Platform code: MIT (see `docs/DATASET_ATTRIBUTION.md`).

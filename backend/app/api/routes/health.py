@@ -1,8 +1,13 @@
 """Health check route."""
+from __future__ import annotations
+
+import datetime
+
 from fastapi import APIRouter
+from sqlalchemy import text
+
 from app.core.config import settings
 from app.database.session import engine
-import datetime
 
 router = APIRouter(prefix="/api/v1/health", tags=["health"])
 
@@ -12,25 +17,16 @@ async def health_check():
     db_ok = True
     try:
         with engine.connect() as conn:
-            conn.execute(engine.dialect.has_table.__func__.__doc__ and None or __import__("sqlalchemy").text("SELECT 1"))
+            conn.execute(text("SELECT 1"))
     except Exception:
-        # Try simpler check
-        try:
-            with engine.connect() as conn:
-                from sqlalchemy import text
-                conn.execute(text("SELECT 1"))
-        except Exception:
-            db_ok = False
-
-    from app.core.config import settings as s
-    detection_model_ready = s.DETECTION_MODEL_PATH.exists()
+        db_ok = False
 
     return {
-        "status": "healthy",
+        "status": "healthy" if db_ok else "degraded",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "database": "connected" if db_ok else "error",
-        "detection_model_ready": detection_model_ready,
-        "authenticity_model_ready": s.AUTHENTICITY_MODEL_PATH.exists(),
+        "detection_model_ready": settings.DETECTION_MODEL_PATH.exists(),
+        "authenticity_model_ready": settings.AUTHENTICITY_MODEL_PATH.exists(),
     }

@@ -1,4 +1,4 @@
-// Type definitions for RoadGuard AI
+// Type definitions for PitScout
 
 export type SeverityLevel = 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL'
 export type AnalysisStatus = 'pending' | 'processing' | 'completed' | 'failed'

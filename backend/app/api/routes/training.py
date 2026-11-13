@@ -1,20 +1,29 @@
-"""Training jobs routes for RoadGuard AI."""
+"""Training job routes.
+
+Training orchestration is intentionally not implemented in this build: there is
+no labelled dataset committed to the repository and no GPU scheduler. The
+endpoints answer 501 instead of pretending a job started.
+"""
 from __future__ import annotations
 
-import datetime
-import uuid
-import asyncio
-from typing import Optional, Dict, Any
-
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database.session import get_db, SessionLocal
+from app.core.auth import verify_api_key
+from app.database.session import get_db
 from app.models.database import TrainingJob
-from app.core.config import settings
 
-router = APIRouter(prefix="/api/v1/training", tags=["training"])
+router = APIRouter(
+    prefix="/api/v1/training",
+    tags=["training"],
+    dependencies=[Depends(verify_api_key)],
+)
+
+_NOT_IMPLEMENTED = (
+    "Model training is not implemented in this deployment. "
+    "It requires a curated, split dataset plus a training runtime; neither is bundled."
+)
 
 
 class DetectionTrainRequest(BaseModel):
@@ -35,79 +44,14 @@ class AuthenticityTrainRequest(BaseModel):
     lr: float = Field(default=0.001, gt=0)
 
 
-def _simulate_training_job(job_id: str):
-    """Background simulator / executor for training."""
-    db = SessionLocal()
-    try:
-        job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
-        if not job:
-            return
-        job.status = "running"
-        job.started_at = datetime.datetime.utcnow()
-        job.logs = "Job started. Loading dataset config...\nInitializing model architecture...\n"
-        db.commit()
-
-        # Update log
-        job.logs += "Verifying PyTorch environment (CPU mode active)...\n"
-        job.logs += f"Training config: {job.config}\n"
-        job.logs += "Training initiated. Monitoring epoch convergence...\n"
-        db.commit()
-    finally:
-        db.close()
+@router.post("/detection/start", status_code=501)
+async def start_detection_training(payload: DetectionTrainRequest):
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
 
 
-@router.post("/detection/start", status_code=202)
-async def start_detection_training(
-    payload: DetectionTrainRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    job_id = str(uuid.uuid4())
-    job = TrainingJob(
-        id=job_id,
-        job_type="detection",
-        status="queued",
-        config=payload.model_dump(),
-        logs=f"Queued detection training job {job_id} at {datetime.datetime.utcnow().isoformat()}\n",
-    )
-    db.add(job)
-    db.commit()
-
-    background_tasks.add_task(_simulate_training_job, job_id)
-
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "job_type": "detection",
-        "message": "Detection model training job submitted successfully.",
-    }
-
-
-@router.post("/authenticity/start", status_code=202)
-async def start_authenticity_training(
-    payload: AuthenticityTrainRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-):
-    job_id = str(uuid.uuid4())
-    job = TrainingJob(
-        id=job_id,
-        job_type="authenticity",
-        status="queued",
-        config=payload.model_dump(),
-        logs=f"Queued authenticity training job {job_id} at {datetime.datetime.utcnow().isoformat()}\n",
-    )
-    db.add(job)
-    db.commit()
-
-    background_tasks.add_task(_simulate_training_job, job_id)
-
-    return {
-        "job_id": job_id,
-        "status": "queued",
-        "job_type": "authenticity",
-        "message": "Authenticity model training job submitted successfully.",
-    }
+@router.post("/authenticity/start", status_code=501)
+async def start_authenticity_training(payload: AuthenticityTrainRequest):
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
 
 
 @router.get("/jobs")

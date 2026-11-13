@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from PIL import Image, ImageOps
+from sqlalchemy import text
 
 from app.core.auth import verify_api_key
 from app.core.config import settings
+from app.database.base import now_utc
 from app.ml.registry import registry
 from app.database.session import SessionLocal
 
@@ -25,7 +27,7 @@ _last_successful_inference_ts: Optional[str] = None
 
 def record_successful_inference() -> None:
     global _last_successful_inference_ts
-    _last_successful_inference_ts = datetime.datetime.utcnow().isoformat() + "Z"
+    _last_successful_inference_ts = now_utc().isoformat() + "Z"
 
 
 @router.get("/diagnostics")
@@ -55,7 +57,7 @@ async def get_system_diagnostics(api_key: str = Depends(verify_api_key)) -> Dict
     db_connected = False
     try:
         db = SessionLocal()
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         db.close()
         db_connected = True
     except Exception:
@@ -80,8 +82,8 @@ async def get_system_diagnostics(api_key: str = Depends(verify_api_key)) -> Dict
 
     return {
         "backend_version": settings.APP_VERSION,
-        "environment": os.getenv("ENVIRONMENT", "production"),
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        "timestamp": now_utc().isoformat() + "Z",
         "runtime": {
             "python_version": sys.version.split()[0],
             "pytorch_version": torch_version,

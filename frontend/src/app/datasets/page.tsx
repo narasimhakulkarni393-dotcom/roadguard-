@@ -46,7 +46,7 @@ export default function DatasetsPage() {
         body: JSON.stringify({ dataset_name: datasetName }),
       })
       const json = await res.json()
-      setActionMessage(json.message)
+      setActionMessage(json.detail || json.message || `Dataset validation returned HTTP ${res.status}`)
     } catch (e: any) {
       setActionMessage(`Error: ${e.message}`)
     }
@@ -60,7 +60,7 @@ export default function DatasetsPage() {
         body: JSON.stringify({ dataset_name: datasetName }),
       })
       const json = await res.json()
-      setActionMessage(json.message)
+      setActionMessage(json.detail || json.message || `Dataset preparation returned HTTP ${res.status}`)
     } catch (e: any) {
       setActionMessage(`Error: ${e.message}`)
     }

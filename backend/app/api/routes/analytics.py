@@ -5,10 +5,15 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.auth import verify_api_key
 from app.database.session import get_db
 from app.models.database import Analysis, Detection, Inspection, TrainingJob
 
-router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+router = APIRouter(
+    prefix="/api/v1/analytics",
+    tags=["analytics"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @router.get("/overview")
@@ -71,6 +76,7 @@ async def analytics_overview(db: Session = Depends(get_db)):
                 "filename": i.original_filename,
                 "status": i.status,
                 "created_at": i.created_at.isoformat() if i.created_at else None,
+                "analysis_id": i.analyses[0].id if i.analyses else None,
             }
             for i in recent_inspections
         ],

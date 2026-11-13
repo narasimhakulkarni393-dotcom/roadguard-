@@ -27,15 +27,22 @@ backend/roadguard.db*
 backend/storage/uploads/*
 backend/storage/annotated/*
 backend/storage/reports/*
+backend/storage/videos/*
+backend/storage/keyframes/*
+backend/storage/evidence/*
 !backend/storage/uploads/.gitkeep
 !backend/storage/annotated/.gitkeep
 !backend/storage/reports/.gitkeep
+!backend/storage/videos/.gitkeep
+!backend/storage/keyframes/.gitkeep
+!backend/storage/evidence/.gitkeep
 storage/uploads/*
 storage/annotated/*
 storage/reports/*
 !storage/uploads/.gitkeep
 !storage/annotated/.gitkeep
 !storage/reports/.gitkeep
+storage/*.mp4
 docs/testts/
 
 # Large Raw Datasets (ignore raw datasets, keep manifests)
