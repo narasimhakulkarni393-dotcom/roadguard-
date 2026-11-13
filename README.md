@@ -100,6 +100,22 @@ Never place it in `NEXT_PUBLIC_*` variables.
 
 ---
 
+## Deployment
+
+The Next.js frontend is deployed on Vercel:
+
+- Production: https://frontend-nine-flame-89.vercel.app
+- Project: `frontend` (root directory `frontend/`)
+- Required environment variables: `BACKEND_URL` (public base URL of the PitScout API) and
+  `ROADGUARD_API_KEY` (same machine-to-machine key the backend expects). Both are read only by
+  the server-side route handlers; neither is exposed to the browser.
+
+The FastAPI backend is **not** deployed on Vercel. It needs PyTorch/Ultralytics/OpenCV, a
+writable SQLite database, on-disk evidence storage and in-process video jobs — none of which fit
+the Vercel Functions runtime. Host it on a persistent container service and point `BACKEND_URL`
+at it. Until a reachable backend is configured, the deployed UI renders its explicit
+"API unreachable" state rather than fabricated data.
+
 ## Honest limitations
 
 - No accuracy, recall or mAP claims are made for the detector. No labelled evaluation set was
